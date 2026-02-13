@@ -1,0 +1,18 @@
+# Remote daemon config (YAML subset).
+listen: 127.0.0.1:7337
+data_dir: ~/.codexd
+retention_count: 200
+
+# Optional: require Authorization: Bearer <token>
+# auth_token: "change-me"
+
+# Optional: allow absolute cwd outside home/data_dir
+# allowed_cwd_roots:
+#   - /mnt
+
+# Optional: enable "project_id + ref" execution (requires git on the remote).
+# projects:
+#   - id: projA
+#     repo_url: git@github.com:you/projA.git
+#     mirror_dir: ~/.codexd/mirrors/projA.git
+

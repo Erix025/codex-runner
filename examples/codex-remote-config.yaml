@@ -1,0 +1,18 @@
+# Local config (YAML subset).
+machines:
+  - name: gpu1
+    # Option A (recommended): SSH target, codex-remote will create a temporary local port-forward per command.
+    ssh: user@gpu1.example.com
+    daemon_port: 7337
+
+    # Option B: direct addr (e.g. you already have VSCode port-forward to localhost:7337)
+    # addr: http://127.0.0.1:7337
+
+    # Optional: token if codexd has auth_token configured
+    # token: change-me
+
+    # Optional: enable explicit ssh -f -N -L tunnel + direct addr path for exec start.
+    # use_direct_addr: true
+
+    # Optional: how to start codexd via SSH (used by `machine up` / dashboard Up button)
+    # daemon_cmd: "nohup ~/bin/codexd serve --config ~/.codexd/config.yaml >/tmp/codexd.log 2>&1 &"
