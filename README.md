@@ -84,6 +84,8 @@ Notes:
 
 ```bash
 ./codex-remote machine check --machine gpu1
+./codex-remote machine ls
+./codex-remote machine ls --json
 ./codex-remote machine up    --machine gpu1
 ```
 

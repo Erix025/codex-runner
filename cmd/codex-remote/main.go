@@ -6,11 +6,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
+	"text/tabwriter"
 	"time"
 
 	"codex-runner/internal/codexremote/client"
@@ -51,6 +54,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  codex-remote exec logs --machine <name> --id <exec_id> [--stream stdout|stderr] [--tail 2000]")
 	fmt.Fprintln(os.Stderr, "  codex-remote exec cancel --machine <name> --id <exec_id>")
 	fmt.Fprintln(os.Stderr, "  codex-remote machine check --machine <name>")
+	fmt.Fprintln(os.Stderr, "  codex-remote machine list [--json] [--parallel 6] [--timeout 8s]")
+	fmt.Fprintln(os.Stderr, "  codex-remote machine ls   [--json] [--parallel 6] [--timeout 8s]")
 	fmt.Fprintln(os.Stderr, "  codex-remote machine up --machine <name>")
 	fmt.Fprintln(os.Stderr, "  codex-remote machine ssh --machine <name> --cmd <string> [--tty]")
 	fmt.Fprintln(os.Stderr, "  codex-remote dashboard [--listen 127.0.0.1:8787]")
@@ -92,6 +97,8 @@ func machineCmd(args []string) {
 	switch args[0] {
 	case "check":
 		machineCheck(args[1:])
+	case "list", "ls":
+		machineList(args[1:])
 	case "up":
 		machineUp(args[1:])
 	case "ssh":
@@ -435,6 +442,122 @@ func machineUp(args []string) {
 		"stderr": res.Stderr,
 		"code":   res.Code,
 	})
+}
+
+func machineList(args []string) {
+	fs := flag.NewFlagSet("machine list", flag.ExitOnError)
+	cfgPath := configFlag(fs)
+	jsonOut := fs.Bool("json", false, "output json")
+	timeout := fs.Duration("timeout", 8*time.Second, "per-machine check timeout")
+	parallel := fs.Int("parallel", 6, "max parallel machine checks")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	cfg, err := loadConfig(*cfgPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "failed to load config:", err)
+		os.Exit(2)
+	}
+
+	st := checkAllMachines(cfg.Machines, *timeout, *parallel)
+	summary := machineListSummary(st)
+	if *jsonOut {
+		_ = jsonutil.WriteJSON(os.Stdout, map[string]any{
+			"total":      summary.Total,
+			"ssh_ok":     summary.SSHOK,
+			"daemon_ok":  summary.DaemonOK,
+			"failed":     summary.Failed,
+			"checked_at": time.Now().UTC().Format(time.RFC3339Nano),
+			"machines":   st,
+		})
+		return
+	}
+
+	if err := writeMachineListTable(os.Stdout, st); err != nil {
+		fmt.Fprintln(os.Stderr, "failed to write machine table:", err)
+		os.Exit(1)
+	}
+	fmt.Fprintf(
+		os.Stdout,
+		"\nsummary: total=%d ssh_ok=%d daemon_ok=%d failed=%d\n",
+		summary.Total,
+		summary.SSHOK,
+		summary.DaemonOK,
+		summary.Failed,
+	)
+}
+
+func checkAllMachines(machines []config.Machine, timeout time.Duration, parallel int) []machcheck.Status {
+	if parallel < 1 {
+		parallel = 1
+	}
+	out := make([]machcheck.Status, len(machines))
+	sem := make(chan struct{}, parallel)
+	var wg sync.WaitGroup
+
+	for i := range machines {
+		wg.Add(1)
+		m := machines[i]
+		go func(idx int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+			out[idx] = machcheck.Check(ctx, m)
+		}(i)
+	}
+	wg.Wait()
+	return out
+}
+
+type machineSummary struct {
+	Total    int
+	SSHOK    int
+	DaemonOK int
+	Failed   int
+}
+
+func machineListSummary(statuses []machcheck.Status) machineSummary {
+	s := machineSummary{Total: len(statuses)}
+	for _, st := range statuses {
+		if st.SSHOK {
+			s.SSHOK++
+		}
+		if st.DaemonOK {
+			s.DaemonOK++
+		}
+		if !st.SSHOK || !st.DaemonOK {
+			s.Failed++
+		}
+	}
+	return s
+}
+
+func writeMachineListTable(w io.Writer, statuses []machcheck.Status) error {
+	tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
+	if _, err := fmt.Fprintln(tw, "NAME\tSSH\tDAEMON\tLATENCY_MS\tERROR"); err != nil {
+		return err
+	}
+	for _, st := range statuses {
+		ssh := "down"
+		if st.SSHOK {
+			ssh = "ok"
+		}
+		daemon := "down"
+		if st.DaemonOK {
+			daemon = "ok"
+		}
+		errMsg := strings.TrimSpace(st.Error)
+		if errMsg == "" {
+			errMsg = "-"
+		}
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\n", st.Name, ssh, daemon, st.LatencyMS, errMsg); err != nil {
+			return err
+		}
+	}
+	return tw.Flush()
 }
 
 func machineSSH(args []string) {
