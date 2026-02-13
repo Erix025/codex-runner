@@ -1,0 +1,633 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+
+	"codex-runner/internal/codexremote/client"
+	"codex-runner/internal/codexremote/config"
+	"codex-runner/internal/codexremote/dashboard"
+	"codex-runner/internal/codexremote/machcheck"
+	"codex-runner/internal/codexremote/sshutil"
+	"codex-runner/internal/shared/jsonutil"
+)
+
+func main() {
+	log.SetFlags(0)
+
+	if len(os.Args) < 2 {
+		usage()
+		os.Exit(2)
+	}
+
+	switch os.Args[1] {
+	case "exec":
+		execCmd(os.Args[2:])
+	case "machine":
+		machineCmd(os.Args[2:])
+	case "dashboard":
+		dashboardCmd(os.Args[2:])
+	default:
+		usage()
+		os.Exit(2)
+	}
+}
+
+func usage() {
+	fmt.Fprintln(os.Stderr, "codex-remote: local CLI for codexd")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "Usage:")
+	fmt.Fprintln(os.Stderr, "  codex-remote exec start --machine <name> --cmd <string> [--project <id> --ref <ref>] [--cwd <path>] [--env KEY=VAL ...]")
+	fmt.Fprintln(os.Stderr, "  codex-remote exec result --machine <name> --id <exec_id>")
+	fmt.Fprintln(os.Stderr, "  codex-remote exec logs --machine <name> --id <exec_id> [--stream stdout|stderr] [--tail 2000]")
+	fmt.Fprintln(os.Stderr, "  codex-remote exec cancel --machine <name> --id <exec_id>")
+	fmt.Fprintln(os.Stderr, "  codex-remote machine check --machine <name>")
+	fmt.Fprintln(os.Stderr, "  codex-remote machine up --machine <name>")
+	fmt.Fprintln(os.Stderr, "  codex-remote machine ssh --machine <name> --cmd <string> [--tty]")
+	fmt.Fprintln(os.Stderr, "  codex-remote dashboard [--listen 127.0.0.1:8787]")
+}
+
+func configFlag(fs *flag.FlagSet) *string {
+	return fs.String("config", "~/.config/codex-remote/config.yaml", "config file path")
+}
+
+func loadConfig(path string) (config.Config, error) {
+	return config.Load(path)
+}
+
+func execCmd(args []string) {
+	if len(args) < 1 {
+		usage()
+		os.Exit(2)
+	}
+	switch args[0] {
+	case "start":
+		execStart(args[1:])
+	case "result":
+		execResult(args[1:])
+	case "logs":
+		execLogs(args[1:])
+	case "cancel":
+		execCancel(args[1:])
+	default:
+		usage()
+		os.Exit(2)
+	}
+}
+
+func machineCmd(args []string) {
+	if len(args) < 1 {
+		usage()
+		os.Exit(2)
+	}
+	switch args[0] {
+	case "check":
+		machineCheck(args[1:])
+	case "up":
+		machineUp(args[1:])
+	case "ssh":
+		machineSSH(args[1:])
+	default:
+		usage()
+		os.Exit(2)
+	}
+}
+
+func execStart(args []string) {
+	fs := flag.NewFlagSet("exec start", flag.ExitOnError)
+	cfgPath := configFlag(fs)
+	machineName := fs.String("machine", "", "machine name")
+	projectID := fs.String("project", "", "project id")
+	ref := fs.String("ref", "", "git ref (required if project is set)")
+	cmdStr := fs.String("cmd", "", "command string")
+	cwd := fs.String("cwd", "", "working dir (relative or absolute)")
+	envList := multiFlag{}
+	fs.Var(&envList, "env", "environment variable KEY=VAL (repeatable)")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if *machineName == "" || *cmdStr == "" {
+		fmt.Fprintln(os.Stderr, "--machine and --cmd are required")
+		os.Exit(2)
+	}
+
+	cfg, err := loadConfig(*cfgPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "failed to load config:", err)
+		os.Exit(2)
+	}
+	m, ok := cfg.FindMachine(*machineName)
+	if !ok {
+		fmt.Fprintln(os.Stderr, "unknown machine:", *machineName)
+		os.Exit(2)
+	}
+	cl, closer, tm, err := connectClientForExec(*m)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if closer != nil {
+		defer closer()
+	}
+
+	env := map[string]string{}
+	for _, kv := range envList {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		env[k] = v
+	}
+
+	req := client.ExecStartRequest{
+		ProjectID: *projectID,
+		Ref:       *ref,
+		Cmd:       *cmdStr,
+		Cwd:       *cwd,
+		Env:       env,
+	}
+	out, err := execStartOnce(cl, req)
+	if err != nil && tm != nil {
+		latency, healthErr := checkHealth(cl)
+		if healthErr != nil || isRetryableExecErr(err) {
+			logTunnelEvent("exec_start", map[string]any{
+				"error_source":   "tunnel",
+				"error":          err.Error(),
+				"machine":        tm.machine,
+				"local_port":     tm.localPort,
+				"tunnel_pid":     tm.tunnelPID,
+				"health_latency": latency.String(),
+				"retry_count":    1,
+			})
+			if closer != nil {
+				closer()
+			}
+			cl2, closer2, tm2, rebuildErr := connectClientForExec(*m)
+			if rebuildErr == nil {
+				cl = cl2
+				closer = closer2
+				tm = tm2
+				if closer != nil {
+					defer closer()
+				}
+				out, err = execStartOnce(cl, req)
+			} else {
+				err = fmt.Errorf("tunnel error: %v (orig exec start error: %w)", rebuildErr, err)
+			}
+		} else {
+			logTunnelEvent("exec_start", map[string]any{
+				"error_source":   "codexd",
+				"error":          err.Error(),
+				"machine":        tm.machine,
+				"local_port":     tm.localPort,
+				"tunnel_pid":     tm.tunnelPID,
+				"health_latency": latency.String(),
+				"retry_count":    0,
+			})
+		}
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if tm != nil {
+		logTunnelEvent("exec_start", map[string]any{
+			"machine":        tm.machine,
+			"local_port":     tm.localPort,
+			"exec_id":        out.ExecID,
+			"tunnel_pid":     tm.tunnelPID,
+			"health_latency": tm.healthLatency.String(),
+			"retry_count":    tm.retryCount,
+		})
+	}
+	_ = jsonutil.WriteJSON(os.Stdout, map[string]any{
+		"exec_id":  out.ExecID,
+		"machine":  m.Name,
+		"status":   out.Status,
+		"base_url": cl.BaseURL,
+	})
+}
+
+func execResult(args []string) {
+	fs := flag.NewFlagSet("exec result", flag.ExitOnError)
+	cfgPath := configFlag(fs)
+	machineName := fs.String("machine", "", "machine name")
+	execID := fs.String("id", "", "exec id")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if *machineName == "" || *execID == "" {
+		fmt.Fprintln(os.Stderr, "--machine and --id are required")
+		os.Exit(2)
+	}
+	cfg, err := loadConfig(*cfgPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "failed to load config:", err)
+		os.Exit(2)
+	}
+	m, ok := cfg.FindMachine(*machineName)
+	if !ok {
+		fmt.Fprintln(os.Stderr, "unknown machine:", *machineName)
+		os.Exit(2)
+	}
+	cl, closer, tm, err := connectClientForExec(*m)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if closer != nil {
+		defer closer()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	b, err := cl.ExecGet(ctx, *execID)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if tm != nil {
+		logTunnelEvent("exec_result", map[string]any{
+			"machine":        tm.machine,
+			"local_port":     tm.localPort,
+			"exec_id":        *execID,
+			"tunnel_pid":     tm.tunnelPID,
+			"health_latency": tm.healthLatency.String(),
+			"retry_count":    tm.retryCount,
+		})
+	}
+	_, _ = os.Stdout.Write(b)
+	if len(b) == 0 || b[len(b)-1] != '\n' {
+		_, _ = os.Stdout.Write([]byte("\n"))
+	}
+}
+
+func execLogs(args []string) {
+	fs := flag.NewFlagSet("exec logs", flag.ExitOnError)
+	cfgPath := configFlag(fs)
+	machineName := fs.String("machine", "", "machine name")
+	execID := fs.String("id", "", "exec id")
+	stream := fs.String("stream", "stdout", "stdout or stderr")
+	tailN := fs.Int64("tail", 2000, "tail bytes")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if *machineName == "" || *execID == "" {
+		fmt.Fprintln(os.Stderr, "--machine and --id are required")
+		os.Exit(2)
+	}
+	cfg, err := loadConfig(*cfgPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "failed to load config:", err)
+		os.Exit(2)
+	}
+	m, ok := cfg.FindMachine(*machineName)
+	if !ok {
+		fmt.Fprintln(os.Stderr, "unknown machine:", *machineName)
+		os.Exit(2)
+	}
+	cl, closer, tm, err := connectClientForExec(*m)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if closer != nil {
+		defer closer()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := cl.ExecLogs(ctx, *execID, *stream, *tailN, "jsonl", os.Stdout); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if tm != nil {
+		logTunnelEvent("exec_logs", map[string]any{
+			"machine":        tm.machine,
+			"local_port":     tm.localPort,
+			"exec_id":        *execID,
+			"stream":         *stream,
+			"tunnel_pid":     tm.tunnelPID,
+			"health_latency": tm.healthLatency.String(),
+			"retry_count":    tm.retryCount,
+		})
+	}
+}
+
+func execCancel(args []string) {
+	fs := flag.NewFlagSet("exec cancel", flag.ExitOnError)
+	cfgPath := configFlag(fs)
+	machineName := fs.String("machine", "", "machine name")
+	execID := fs.String("id", "", "exec id")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if *machineName == "" || *execID == "" {
+		fmt.Fprintln(os.Stderr, "--machine and --id are required")
+		os.Exit(2)
+	}
+	cfg, err := loadConfig(*cfgPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "failed to load config:", err)
+		os.Exit(2)
+	}
+	m, ok := cfg.FindMachine(*machineName)
+	if !ok {
+		fmt.Fprintln(os.Stderr, "unknown machine:", *machineName)
+		os.Exit(2)
+	}
+	cl, closer, tm, err := connectClientForExec(*m)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if closer != nil {
+		defer closer()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	b, err := cl.ExecCancel(ctx, *execID)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if tm != nil {
+		logTunnelEvent("exec_cancel", map[string]any{
+			"machine":        tm.machine,
+			"local_port":     tm.localPort,
+			"exec_id":        *execID,
+			"tunnel_pid":     tm.tunnelPID,
+			"health_latency": tm.healthLatency.String(),
+			"retry_count":    tm.retryCount,
+		})
+	}
+	_, _ = os.Stdout.Write(b)
+	if len(b) == 0 || b[len(b)-1] != '\n' {
+		_, _ = os.Stdout.Write([]byte("\n"))
+	}
+}
+
+func machineCheck(args []string) {
+	fs := flag.NewFlagSet("machine check", flag.ExitOnError)
+	cfgPath := configFlag(fs)
+	machineName := fs.String("machine", "", "machine name")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if *machineName == "" {
+		fmt.Fprintln(os.Stderr, "--machine is required")
+		os.Exit(2)
+	}
+	cfg, err := loadConfig(*cfgPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "failed to load config:", err)
+		os.Exit(2)
+	}
+	m, ok := cfg.FindMachine(*machineName)
+	if !ok {
+		fmt.Fprintln(os.Stderr, "unknown machine:", *machineName)
+		os.Exit(2)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	st := machcheck.Check(ctx, *m)
+	_ = jsonutil.WriteJSON(os.Stdout, st)
+}
+
+func machineUp(args []string) {
+	fs := flag.NewFlagSet("machine up", flag.ExitOnError)
+	cfgPath := configFlag(fs)
+	machineName := fs.String("machine", "", "machine name")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if *machineName == "" {
+		fmt.Fprintln(os.Stderr, "--machine is required")
+		os.Exit(2)
+	}
+	cfg, err := loadConfig(*cfgPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "failed to load config:", err)
+		os.Exit(2)
+	}
+	m, ok := cfg.FindMachine(*machineName)
+	if !ok {
+		fmt.Fprintln(os.Stderr, "unknown machine:", *machineName)
+		os.Exit(2)
+	}
+	if strings.TrimSpace(m.SSH) == "" {
+		fmt.Fprintln(os.Stderr, "machine.ssh is required")
+		os.Exit(2)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	res, err := sshutil.RunSSH(ctx, m.SSH, m.DaemonCmd)
+	_ = json.NewEncoder(os.Stdout).Encode(map[string]any{
+		"ok":     err == nil,
+		"stdout": res.Stdout,
+		"stderr": res.Stderr,
+		"code":   res.Code,
+	})
+}
+
+func machineSSH(args []string) {
+	fs := flag.NewFlagSet("machine ssh", flag.ExitOnError)
+	cfgPath := configFlag(fs)
+	machineName := fs.String("machine", "", "machine name")
+	cmdStr := fs.String("cmd", "", "remote command string")
+	tty := fs.Bool("tty", false, "request tty (-tt)")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if *machineName == "" || strings.TrimSpace(*cmdStr) == "" {
+		fmt.Fprintln(os.Stderr, "--machine and --cmd are required")
+		os.Exit(2)
+	}
+	cfg, err := loadConfig(*cfgPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "failed to load config:", err)
+		os.Exit(2)
+	}
+	m, ok := cfg.FindMachine(*machineName)
+	if !ok {
+		fmt.Fprintln(os.Stderr, "unknown machine:", *machineName)
+		os.Exit(2)
+	}
+	if strings.TrimSpace(m.SSH) == "" {
+		fmt.Fprintln(os.Stderr, "machine.ssh is required")
+		os.Exit(2)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	res, err := sshutil.RunSSHWithOptions(ctx, m.SSH, *cmdStr, true, *tty)
+	_ = json.NewEncoder(os.Stdout).Encode(map[string]any{
+		"ok":            err == nil,
+		"ssh":           m.SSH,
+		"forward_agent": true,
+		"tty":           *tty,
+		"stdout":        res.Stdout,
+		"stderr":        res.Stderr,
+		"code":          res.Code,
+	})
+}
+
+func dashboardCmd(args []string) {
+	fs := flag.NewFlagSet("dashboard", flag.ExitOnError)
+	cfgPath := configFlag(fs)
+	listen := fs.String("listen", "127.0.0.1:8787", "listen address")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	cfg, err := loadConfig(*cfgPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "failed to load config:", err)
+		os.Exit(2)
+	}
+	s := dashboard.New(cfg)
+	srv := &http.Server{
+		Addr:              *listen,
+		Handler:           s.Handler(),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	fmt.Fprintln(os.Stderr, "dashboard listening on http://"+*listen)
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		fmt.Fprintln(os.Stderr, "server error:", err)
+		os.Exit(1)
+	}
+}
+
+type multiFlag []string
+
+func (m *multiFlag) String() string { return strings.Join(*m, ",") }
+func (m *multiFlag) Set(v string) error {
+	*m = append(*m, v)
+	return nil
+}
+
+func connectClient(m config.Machine) (*client.Client, func(), error) {
+	if m.Addr != "" {
+		return client.New(m.Addr, m.Token), nil, nil
+	}
+	if m.SSH == "" {
+		return nil, nil, fmt.Errorf("machine %s has neither addr nor ssh", m.Name)
+	}
+	startCtx, startCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	fwd, err := sshutil.StartLocalForward(startCtx, m.SSH, "127.0.0.1", "127.0.0.1", m.DaemonPort)
+	startCancel()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create ssh forward: %w", err)
+	}
+	base := fmt.Sprintf("http://127.0.0.1:%d", fwd.LocalPort)
+	return client.New(base, m.Token), func() { _ = fwd.Close() }, nil
+}
+
+type tunnelMeta struct {
+	machine       string
+	localPort     int
+	tunnelPID     int
+	healthLatency time.Duration
+	retryCount    int
+}
+
+func connectClientForExec(m config.Machine) (*client.Client, func(), *tunnelMeta, error) {
+	if !m.UseDirectAddr {
+		cl, closer, err := connectClient(m)
+		return cl, closer, nil, err
+	}
+	if strings.TrimSpace(m.SSH) == "" {
+		return nil, nil, nil, fmt.Errorf("tunnel error: machine %s requires machine.ssh for direct addr mode", m.Name)
+	}
+	maxAttempts := 3
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		startCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		tunnel, err := sshutil.EnsureTunnel(startCtx, m.Name, m.SSH, 0, m.DaemonPort)
+		cancel()
+		if err != nil {
+			lastErr = err
+			if attempt < maxAttempts {
+				backoff := time.Duration(1<<(attempt-1)) * 250 * time.Millisecond
+				time.Sleep(backoff)
+				continue
+			}
+			break
+		}
+		cl := client.New(tunnel.Addr(), m.Token)
+		latency, healthErr := checkHealth(cl)
+		if healthErr == nil {
+			meta := &tunnelMeta{
+				machine:       m.Name,
+				localPort:     tunnel.LocalPort,
+				tunnelPID:     tunnel.PID,
+				healthLatency: latency,
+				retryCount:    attempt - 1,
+			}
+			return cl, func() { _ = tunnel.Close() }, meta, nil
+		}
+		_ = tunnel.Close()
+		lastErr = healthErr
+		if attempt < maxAttempts {
+			backoff := time.Duration(1<<(attempt-1)) * 250 * time.Millisecond
+			time.Sleep(backoff)
+		}
+	}
+	return nil, nil, nil, fmt.Errorf("tunnel error: unable to establish healthy direct tunnel for machine %s: %w", m.Name, lastErr)
+}
+
+func checkHealth(cl *client.Client) (time.Duration, error) {
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, err := cl.Health(ctx)
+	return time.Since(start), err
+}
+
+func logTunnelEvent(event string, fields map[string]any) {
+	fields["event"] = event
+	fields["mode"] = "direct_addr_tunnel"
+	b, err := json.Marshal(fields)
+	if err != nil {
+		return
+	}
+	fmt.Fprintln(os.Stderr, string(b))
+}
+
+func execStartOnce(cl *client.Client, req client.ExecStartRequest) (client.ExecStartResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	return cl.ExecStart(ctx, req)
+}
+
+func isRetryableExecErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "connection reset by peer") {
+		return true
+	}
+	if strings.Contains(msg, "connection refused") {
+		return true
+	}
+	if strings.Contains(msg, "broken pipe") {
+		return true
+	}
+	if strings.Contains(msg, "eof") {
+		return true
+	}
+	if strings.Contains(msg, "timeout") {
+		return true
+	}
+	return false
+}
