@@ -25,6 +25,15 @@ make build-windows
 make build-all
 ```
 
+## CI / Release
+
+- On every PR: GitHub Actions runs `go test ./...` and `make build-all`.
+- On every push to `main` (including merged PRs): GitHub Actions:
+  - computes the next semver tag (`vX.Y.Z`, starting at `v0.1.0`),
+  - builds all platform binaries into `dist/`,
+  - generates `dist/SHA256SUMS`,
+  - creates a GitHub Release and uploads artifacts.
+
 Manual single-target example (Linux amd64):
 
 ```bash
