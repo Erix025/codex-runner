@@ -34,8 +34,58 @@ func Default() Config {
 	}
 }
 
+const defaultConfigTemplate = `# Remote daemon config (YAML subset).
+listen: 127.0.0.1:7337
+data_dir: ~/.codexd
+retention_count: 200
+
+# Optional: require Authorization: Bearer <token>
+# auth_token: "change-me"
+
+# Optional: allow absolute cwd outside home/data_dir
+# allowed_cwd_roots:
+#   - /mnt
+
+# Optional: enable "project_id + ref" execution (requires git on the remote).
+# projects:
+#   - id: projA
+#     repo_url: git@github.com:you/projA.git
+#     mirror_dir: ~/.codexd/mirrors/projA.git
+`
+
+func EnsureDefaultConfig(path string) (created bool, resolvedPath string, err error) {
+	p, err := osutil.ExpandUser(path)
+	if err != nil {
+		return false, "", err
+	}
+	if _, err := os.Stat(p); err == nil {
+		return false, p, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return false, "", err
+	}
+	f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return false, p, nil
+		}
+		return false, "", err
+	}
+	defer f.Close()
+	if _, err := f.WriteString(defaultConfigTemplate); err != nil {
+		return false, "", err
+	}
+	return true, p, nil
+}
+
 func Load(path string) (Config, error) {
-	b, err := os.ReadFile(path)
+	p, err := osutil.ExpandUser(path)
+	if err != nil {
+		return Config{}, err
+	}
+	b, err := os.ReadFile(p)
 	if err != nil {
 		return Config{}, err
 	}
