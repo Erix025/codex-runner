@@ -6,6 +6,7 @@ description: Submit remote command execution through codex-remote and return exe
 # codex-remote-submit
 
 Use this skill to start async execution on a remote machine and return a stable `exec_id`.
+For fast synchronous streaming, use `codex-remote exec run` via orchestrator routing.
 
 ## Inputs To Confirm
 
@@ -41,4 +42,4 @@ codex-remote exec start --machine "$MACHINE" --project "$PROJECT" --ref "$REF" -
 
 - For status: use `codex-remote-result`.
 - For logs: use `codex-remote-result` log flow.
-
+- For fast sync commands: use `exec run` instead of this skill.

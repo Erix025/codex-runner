@@ -11,8 +11,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -49,6 +51,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "codex-remote: local CLI for codexd")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Usage:")
+	fmt.Fprintln(os.Stderr, "  codex-remote exec run   --machine <name> --cmd <string> [--project <id> --ref <ref>] [--cwd <path>] [--env KEY=VAL ...]")
 	fmt.Fprintln(os.Stderr, "  codex-remote exec start --machine <name> --cmd <string> [--project <id> --ref <ref>] [--cwd <path>] [--env KEY=VAL ...]")
 	fmt.Fprintln(os.Stderr, "  codex-remote exec result --machine <name> --id <exec_id>")
 	fmt.Fprintln(os.Stderr, "  codex-remote exec logs --machine <name> --id <exec_id> [--stream stdout|stderr] [--tail 2000]")
@@ -75,6 +78,8 @@ func execCmd(args []string) {
 		os.Exit(2)
 	}
 	switch args[0] {
+	case "run":
+		execRun(args[1:])
 	case "start":
 		execStart(args[1:])
 	case "result":
@@ -106,6 +111,77 @@ func machineCmd(args []string) {
 	default:
 		usage()
 		os.Exit(2)
+	}
+}
+
+func execRun(args []string) {
+	fs := flag.NewFlagSet("exec run", flag.ExitOnError)
+	cfgPath := configFlag(fs)
+	machineName := fs.String("machine", "", "machine name")
+	projectID := fs.String("project", "", "project id")
+	ref := fs.String("ref", "", "git ref (required if project is set)")
+	cmdStr := fs.String("cmd", "", "command string")
+	cwd := fs.String("cwd", "", "working dir (relative or absolute)")
+	envList := multiFlag{}
+	fs.Var(&envList, "env", "environment variable KEY=VAL (repeatable)")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if *machineName == "" || *cmdStr == "" {
+		fmt.Fprintln(os.Stderr, "--machine and --cmd are required")
+		os.Exit(2)
+	}
+
+	cfg, err := loadConfig(*cfgPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "failed to load config:", err)
+		os.Exit(2)
+	}
+	m, ok := cfg.FindMachine(*machineName)
+	if !ok {
+		fmt.Fprintln(os.Stderr, "unknown machine:", *machineName)
+		os.Exit(2)
+	}
+	cl, closer, tm, err := connectClientForExec(*m)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if closer != nil {
+		defer closer()
+	}
+
+	env := map[string]string{}
+	for _, kv := range envList {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		env[k] = v
+	}
+
+	req := client.ExecStartRequest{
+		ProjectID: *projectID,
+		Ref:       *ref,
+		Cmd:       *cmdStr,
+		Cwd:       *cwd,
+		Env:       env,
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := cl.ExecRun(ctx, req, os.Stdout); err != nil && !errors.Is(err, context.Canceled) {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if tm != nil {
+		logTunnelEvent("exec_run", map[string]any{
+			"machine":        tm.machine,
+			"local_port":     tm.localPort,
+			"tunnel_pid":     tm.tunnelPID,
+			"health_latency": tm.healthLatency.String(),
+			"retry_count":    tm.retryCount,
+		})
 	}
 }
 
