@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"codex-runner/internal/codexd/config"
@@ -193,7 +192,7 @@ func (s *Service) runExec(execDir string, req execRequest, meta execMeta) {
 	cmd.Dir = cwd
 	cmd.Stdout = stdoutFile
 	cmd.Stderr = stderrFile
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	configureCmd(cmd)
 	cmd.Env = os.Environ()
 	for k, v := range req.Env {
 		cmd.Env = append(cmd.Env, k+"="+v)
@@ -218,11 +217,9 @@ func (s *Service) runExec(execDir string, req execRequest, meta execMeta) {
 	err = cmd.Wait()
 	exitCode := 0
 	if err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			if ws, ok := ee.Sys().(syscall.WaitStatus); ok {
-				exitCode = ws.ExitStatus()
-			} else {
+		if cmd.ProcessState != nil {
+			exitCode = cmd.ProcessState.ExitCode()
+			if exitCode < 0 {
 				exitCode = 1
 			}
 		} else {
@@ -320,7 +317,7 @@ func (s *Service) handleExecCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Best-effort: SIGTERM then SIGKILL after timeout.
-	if err := signalProcessGroup(pid, syscall.SIGTERM); err != nil {
+	if err := gracefulStopExec(pid); err != nil {
 		writeErr(w, http.StatusInternalServerError, "failed to signal process")
 		return
 	}
@@ -332,23 +329,8 @@ func (s *Service) handleExecCancel(w http.ResponseWriter, r *http.Request) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	_ = signalProcessGroup(pid, syscall.SIGKILL)
+	_ = forceStopExec(pid)
 	_ = jsonutil.WriteJSON(w, map[string]any{"canceled": true})
-}
-
-func processAlive(pid int) bool {
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	// Signal 0: check existence (unix).
-	err = p.Signal(syscall.Signal(0))
-	return err == nil
-}
-
-func signalProcessGroup(pid int, sig syscall.Signal) error {
-	// Negative pid means process group on unix.
-	return syscall.Kill(-pid, sig)
 }
 
 func (s *Service) cleanupRetention() error {
