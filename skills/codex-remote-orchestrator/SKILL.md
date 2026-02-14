@@ -10,9 +10,9 @@ Run the full remote execution chain through one skill.
 ## Execution Flow
 
 1. Validate machine readiness.
-2. Submit command and capture `exec_id`.
-3. Query result status.
-4. Fetch logs on demand.
+2. Choose execution mode (fast sync or async).
+3. For async: submit command and capture `exec_id`.
+4. For async: query result status and fetch logs on demand.
 5. Troubleshoot automatically on errors.
 
 ## Step 1: Machine Readiness
@@ -32,7 +32,23 @@ codex-remote machine check --machine "$MACHINE"
 
 Abort only if SSH remains unreachable.
 
-## Step 2: Submit Command
+## Step 2: Choose Mode
+
+Fast sync mode (short commands):
+
+```bash
+codex-remote exec run --machine "$MACHINE" --cmd "$CMD"
+```
+
+Async mode (long-running commands):
+
+```bash
+codex-remote exec start --machine "$MACHINE" --cmd "$CMD"
+```
+
+Classification is owned by the caller; do not auto-detect inside this tool.
+
+## Step 3: Submit Command (Async Only)
 
 Without project context:
 
@@ -48,7 +64,7 @@ codex-remote exec start --machine "$MACHINE" --project "$PROJECT" --ref "$REF" -
 
 Always return `exec_id` to caller.
 
-## Step 3: Status Query
+## Step 4: Status Query (Async Only)
 
 ```bash
 codex-remote exec result --machine "$MACHINE" --id "$EXEC_ID"
@@ -59,7 +75,7 @@ Interpret:
 - `running`: execution still in progress.
 - `finished`: read `exit_code`.
 
-## Step 4: Logs Query
+## Step 5: Logs Query (Async Only)
 
 Stdout:
 
@@ -75,7 +91,7 @@ codex-remote exec logs --machine "$MACHINE" --id "$EXEC_ID" --stream stderr --ta
 
 Logs are JSONL. Parse line-by-line.
 
-## Step 5: Troubleshooting Triggers
+## Step 6: Troubleshooting Triggers
 
 On these errors, perform immediate triage:
 
@@ -96,9 +112,9 @@ codex-remote exec start --machine "$MACHINE" --cmd "hostname"
 When interacting with user or agent caller, keep this structure:
 
 1. `machine` and readiness (`ssh_ok`, `daemon_ok`)
-2. `exec_id` (if submitted)
-3. `status`
-4. `exit_code` (if finished)
-5. optional `stdout_tail` / `stderr_tail`
-6. next action (`wait`, `done`, or `fix-config`)
-
+2. `mode` (`run` or `async`)
+3. `exec_id` (async only)
+4. `status`
+5. `exit_code` (if finished)
+6. optional `stdout_tail` / `stderr_tail`
+7. next action (`wait`, `done`, or `fix-config`)

@@ -1,4 +1,4 @@
-# `codex-remote` result contract
+# `codex-remote` result contract (async flow)
 
 ## `exec result`
 
@@ -17,4 +17,4 @@
 
 - Always preserve `exec_id` in responses.
 - Do not fabricate completion; rely on returned status and exit code.
-
+- For sync mode (`exec run`), consume JSONL events directly instead of calling result/logs.
