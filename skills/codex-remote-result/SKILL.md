@@ -5,7 +5,8 @@ description: Query execution status and logs from codex-remote by exec_id. Use w
 
 # codex-remote-result
 
-Use this skill after an execution has been submitted and `exec_id` is known.
+Use this skill after an async execution has been submitted and `exec_id` is known.
+Do not use it for `exec run` synchronous streaming.
 
 ## Inputs To Confirm
 
@@ -43,4 +44,3 @@ codex-remote exec cancel --machine "$MACHINE" --id "$EXEC_ID"
 ```
 
 Use only when user explicitly asks to stop the command.
-

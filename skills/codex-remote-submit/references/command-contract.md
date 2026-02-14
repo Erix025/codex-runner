@@ -1,4 +1,4 @@
-# `codex-remote exec start` contract
+# `codex-remote exec start` contract (async)
 
 Expected stdout JSON fields:
 
@@ -15,3 +15,7 @@ Failure mode:
   - connection reset
   - auth token mismatch
 
+Related sync mode:
+
+- Use `codex-remote exec run` for synchronous JSONL streaming.
+- Mode selection is handled by caller policy, not by codex-remote.

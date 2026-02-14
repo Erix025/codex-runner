@@ -1,11 +1,13 @@
 package service
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -38,6 +40,7 @@ func New(cfg config.Config) *Service {
 func (s *Service) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("POST /v1/exec/run", s.auth(s.handleExecRun))
 	mux.HandleFunc("POST /v1/exec", s.auth(s.handleExecStart))
 	mux.HandleFunc("GET /v1/exec/{id}", s.auth(s.handleExecGet))
 	mux.HandleFunc("GET /v1/exec/{id}/logs", s.auth(s.handleExecLogs))
@@ -92,48 +95,45 @@ type execMeta struct {
 	Error      string            `json:"error,omitempty"`
 }
 
-func (s *Service) handleExecStart(w http.ResponseWriter, r *http.Request) {
-	var req execRequest
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid json body")
+func (s *Service) handleExecRun(w http.ResponseWriter, r *http.Request) {
+	req, ok := decodeExecRequest(w, r)
+	if !ok {
 		return
 	}
-	req.Cmd = strings.TrimSpace(req.Cmd)
-	if req.Cmd == "" {
-		writeErr(w, http.StatusBadRequest, "cmd is required")
-		return
-	}
-
-	execID, err := id.New()
+	execID, execDir, meta, err := s.initExec(req)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "failed to generate exec_id")
-		return
-	}
-	execDir := filepath.Join(s.cfg.DataDir, "exec", execID)
-	if err := os.MkdirAll(execDir, 0o755); err != nil {
-		writeErr(w, http.StatusInternalServerError, "failed to create exec dir")
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	meta := execMeta{
-		ExecID:    execID,
-		Status:    "running",
-		ProjectID: req.ProjectID,
-		Ref:       req.Ref,
-		Cmd:       req.Cmd,
-		Cwd:       req.Cwd,
-		Env:       req.Env,
-		StartedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	ew, err := newEventWriter(w)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "streaming not supported")
+		return
 	}
-	if err := writeMeta(execDir, meta); err != nil {
-		writeErr(w, http.StatusInternalServerError, "failed to write meta")
+	if err := ew.Write(map[string]any{
+		"type":       "started",
+		"exec_id":    execID,
+		"status":     "running",
+		"started_at": meta.StartedAt,
+	}); err != nil {
 		return
 	}
 
-	// Enforce retention opportunistically.
-	_ = s.cleanupRetention()
+	s.runExecStreaming(r.Context(), execDir, req, meta, ew)
+}
+
+func (s *Service) handleExecStart(w http.ResponseWriter, r *http.Request) {
+	req, ok := decodeExecRequest(w, r)
+	if !ok {
+		return
+	}
+
+	execID, execDir, meta, err := s.initExec(req)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 
 	go s.runExec(execDir, req, meta)
 
@@ -235,6 +235,241 @@ func (s *Service) runExec(execDir string, req execRequest, meta execMeta) {
 	}
 	_ = writeMeta(execDir, meta)
 	_ = writeExitCode(execDir, exitCode)
+}
+
+func (s *Service) runExecStreaming(ctx context.Context, execDir string, req execRequest, meta execMeta, ew *eventWriter) {
+	workDir, cleanupWorktree, err := s.prepareWorkdir(ctx, execDir, req.ProjectID, req.Ref)
+	if err != nil {
+		finished := s.finalizeMeta(execDir, meta, 127, err)
+		_ = ew.Write(finishedEvent(finished))
+		return
+	}
+	if cleanupWorktree != nil {
+		defer cleanupWorktree()
+	}
+
+	cwd, err := s.resolveCwd(workDir, req.ProjectID, req.Cwd)
+	if err != nil {
+		finished := s.finalizeMeta(execDir, meta, 126, err)
+		_ = ew.Write(finishedEvent(finished))
+		return
+	}
+
+	stdoutPath := filepath.Join(execDir, "stdout.log")
+	stderrPath := filepath.Join(execDir, "stderr.log")
+	stdoutFile, err := os.OpenFile(stdoutPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		finished := s.finalizeMeta(execDir, meta, 127, err)
+		_ = ew.Write(finishedEvent(finished))
+		return
+	}
+	defer stdoutFile.Close()
+	stderrFile, err := os.OpenFile(stderrPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		finished := s.finalizeMeta(execDir, meta, 127, err)
+		_ = ew.Write(finishedEvent(finished))
+		return
+	}
+	defer stderrFile.Close()
+
+	cmd := exec.CommandContext(ctx, "sh", "-lc", req.Cmd)
+	cmd.Dir = cwd
+	configureCmd(cmd)
+	cmd.Env = os.Environ()
+	for k, v := range req.Env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		finished := s.finalizeMeta(execDir, meta, 127, err)
+		_ = ew.Write(finishedEvent(finished))
+		return
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		finished := s.finalizeMeta(execDir, meta, 127, err)
+		_ = ew.Write(finishedEvent(finished))
+		return
+	}
+
+	if err := cmd.Start(); err != nil {
+		finished := s.finalizeMeta(execDir, meta, 127, err)
+		_ = ew.Write(finishedEvent(finished))
+		return
+	}
+
+	meta.PID = cmd.Process.Pid
+	_ = writeMeta(execDir, meta)
+	_ = writePID(execDir, meta.PID)
+
+	streamErrs := make(chan error, 2)
+	go func() {
+		streamErrs <- streamToFileAndEvents(stdoutPipe, stdoutFile, "stdout", ew)
+	}()
+	go func() {
+		streamErrs <- streamToFileAndEvents(stderrPipe, stderrFile, "stderr", ew)
+	}()
+
+	waitErr := cmd.Wait()
+	firstStreamErr := <-streamErrs
+	secondStreamErr := <-streamErrs
+	streamErr := firstNonNil(firstStreamErr, secondStreamErr)
+
+	exitCode := 0
+	if waitErr != nil {
+		if cmd.ProcessState != nil {
+			exitCode = cmd.ProcessState.ExitCode()
+			if exitCode < 0 {
+				exitCode = 1
+			}
+		} else {
+			exitCode = 1
+		}
+	}
+
+	finalErr := waitErr
+	if finalErr == nil {
+		finalErr = streamErr
+	}
+	finished := s.finalizeMeta(execDir, meta, exitCode, finalErr)
+	_ = ew.Write(finishedEvent(finished))
+}
+
+func decodeExecRequest(w http.ResponseWriter, r *http.Request) (execRequest, bool) {
+	var req execRequest
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json body")
+		return execRequest{}, false
+	}
+	req.Cmd = strings.TrimSpace(req.Cmd)
+	if req.Cmd == "" {
+		writeErr(w, http.StatusBadRequest, "cmd is required")
+		return execRequest{}, false
+	}
+	return req, true
+}
+
+func (s *Service) initExec(req execRequest) (string, string, execMeta, error) {
+	execID, err := id.New()
+	if err != nil {
+		return "", "", execMeta{}, errors.New("failed to generate exec_id")
+	}
+	execDir := filepath.Join(s.cfg.DataDir, "exec", execID)
+	if err := os.MkdirAll(execDir, 0o755); err != nil {
+		return "", "", execMeta{}, errors.New("failed to create exec dir")
+	}
+	meta := execMeta{
+		ExecID:    execID,
+		Status:    "running",
+		ProjectID: req.ProjectID,
+		Ref:       req.Ref,
+		Cmd:       req.Cmd,
+		Cwd:       req.Cwd,
+		Env:       req.Env,
+		StartedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if err := writeMeta(execDir, meta); err != nil {
+		return "", "", execMeta{}, errors.New("failed to write meta")
+	}
+	_ = s.cleanupRetention()
+	return execID, execDir, meta, nil
+}
+
+func (s *Service) finalizeMeta(execDir string, meta execMeta, exitCode int, err error) execMeta {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	meta.Status = "finished"
+	meta.FinishedAt = now
+	meta.ExitCode = &exitCode
+	if err != nil {
+		meta.Error = err.Error()
+	}
+	_ = writeMeta(execDir, meta)
+	_ = writeExitCode(execDir, exitCode)
+	return meta
+}
+
+func finishedEvent(meta execMeta) map[string]any {
+	out := map[string]any{
+		"type":        "finished",
+		"exec_id":     meta.ExecID,
+		"status":      meta.Status,
+		"finished_at": meta.FinishedAt,
+		"exit_code":   0,
+	}
+	if meta.ExitCode != nil {
+		out["exit_code"] = *meta.ExitCode
+	}
+	if meta.Error != "" {
+		out["error"] = meta.Error
+	}
+	return out
+}
+
+func streamToFileAndEvents(src io.Reader, dst *os.File, stream string, ew *eventWriter) error {
+	reader := bufio.NewReader(src)
+	for {
+		chunk, err := reader.ReadString('\n')
+		if len(chunk) > 0 {
+			if _, werr := dst.WriteString(chunk); werr != nil {
+				return werr
+			}
+			line := strings.TrimSuffix(chunk, "\n")
+			line = strings.TrimSuffix(line, "\r")
+			if err := ew.Write(map[string]any{
+				"type":   "log",
+				"stream": stream,
+				"line":   line,
+			}); err != nil {
+				return err
+			}
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+	}
+}
+
+func firstNonNil(errs ...error) error {
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type eventWriter struct {
+	w       http.ResponseWriter
+	flusher http.Flusher
+	mu      sync.Mutex
+}
+
+func newEventWriter(w http.ResponseWriter) (*eventWriter, error) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		return nil, errors.New("response writer is not flushable")
+	}
+	w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	return &eventWriter{
+		w:       w,
+		flusher: flusher,
+	}, nil
+}
+
+func (ew *eventWriter) Write(v any) error {
+	ew.mu.Lock()
+	defer ew.mu.Unlock()
+	if err := jsonutil.WriteJSON(ew.w, v); err != nil {
+		return err
+	}
+	ew.flusher.Flush()
+	return nil
 }
 
 func (s *Service) handleExecGet(w http.ResponseWriter, r *http.Request) {
