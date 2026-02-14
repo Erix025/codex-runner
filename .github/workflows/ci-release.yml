@@ -96,22 +96,30 @@ jobs:
             sha256sum "$f"
           done > SHA256SUMS
 
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          cp dist/linux-amd64/codexd release/codexd-linux-amd64
+          cp dist/linux-amd64/codex-remote release/codex-remote-linux-amd64
+          cp dist/linux-arm64/codexd release/codexd-linux-arm64
+          cp dist/linux-arm64/codex-remote release/codex-remote-linux-arm64
+          cp dist/darwin-amd64/codexd release/codexd-darwin-amd64
+          cp dist/darwin-amd64/codex-remote release/codex-remote-darwin-amd64
+          cp dist/darwin-arm64/codexd release/codexd-darwin-arm64
+          cp dist/darwin-arm64/codex-remote release/codex-remote-darwin-arm64
+          cp dist/windows-amd64/codexd.exe release/codexd-windows-amd64.exe
+          cp dist/windows-amd64/codex-remote.exe release/codex-remote-windows-amd64.exe
+          cp dist/windows-arm64/codexd.exe release/codexd-windows-arm64.exe
+          cp dist/windows-arm64/codex-remote.exe release/codex-remote-windows-arm64.exe
+          cp dist/SHA256SUMS release/SHA256SUMS
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           generate_release_notes: true
+          overwrite_files: true
           files: |
-            dist/linux-amd64/codexd
-            dist/linux-amd64/codex-remote
-            dist/linux-arm64/codexd
-            dist/linux-arm64/codex-remote
-            dist/darwin-amd64/codexd
-            dist/darwin-amd64/codex-remote
-            dist/darwin-arm64/codexd
-            dist/darwin-arm64/codex-remote
-            dist/windows-amd64/codexd.exe
-            dist/windows-amd64/codex-remote.exe
-            dist/windows-arm64/codexd.exe
-            dist/windows-arm64/codex-remote.exe
-            dist/SHA256SUMS
+            release/*
