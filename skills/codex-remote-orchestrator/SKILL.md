@@ -10,9 +10,9 @@ Run the full remote execution chain through one skill.
 ## Execution Flow
 
 1. Validate machine readiness.
-2. Submit command and capture `exec_id`.
-3. Query result status.
-4. Fetch logs on demand.
+2. Choose execution mode (fast sync or async).
+3. For async: submit command and capture `exec_id`.
+4. For async: query result status and fetch logs on demand.
 5. Troubleshoot automatically on errors.
 
 ## Step 1: Machine Readiness
@@ -32,7 +32,23 @@ codex-remote machine check --machine "$MACHINE"
 
 Abort only if SSH remains unreachable.
 
-## Step 2: Submit Command
+## Step 2: Choose Mode
+
+Fast sync mode (short commands):
+
+```bash
+codex-remote exec run --machine "$MACHINE" --cmd "$CMD"
+```
+
+Async mode (long-running commands):
+
+```bash
+codex-remote exec start --machine "$MACHINE" --cmd "$CMD"
+```
+
+Classification is owned by the caller; do not auto-detect inside this tool.
+
+## Step 3: Submit Command (Async Only)
 
 Without project context:
 
