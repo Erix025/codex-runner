@@ -67,9 +67,12 @@ func execWatch(args []string) {
 	for {
 		for _, s := range streams {
 			lines, err := fetchLogLines(cl, *execID, s, *tail)
-			if err != nil {
+			if err != nil && !isRetryableExecErr(err) {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
+			}
+			if err != nil {
+				continue
 			}
 			newLines := deltaLines(seen[s], lines)
 			for _, line := range newLines {
@@ -81,6 +84,10 @@ func execWatch(args []string) {
 
 		meta, err := fetchExecMeta(cl, *execID)
 		if err != nil {
+			if isRetryableExecErr(err) {
+				time.Sleep(*poll)
+				continue
+			}
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -115,26 +122,34 @@ func execWatch(args []string) {
 
 func fetchExecMeta(cl *client.Client, execID string) (map[string]any, error) {
 	var out map[string]any
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	b, err := cl.ExecGet(ctx, execID)
-	if err != nil {
-		return nil, err
-	}
-	if err := json.Unmarshal(b, &out); err != nil {
-		return nil, err
-	}
-	return out, nil
+	err := withRetry(3, func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		b, err := cl.ExecGet(ctx, execID)
+		if err != nil {
+			return err
+		}
+		return json.Unmarshal(b, &out)
+	})
+	return out, err
 }
 
 func fetchLogLines(cl *client.Client, execID string, stream string, tail int64) ([]string, error) {
-	var buf bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	if err := cl.ExecLogs(ctx, execID, stream, tail, "jsonl", &buf); err != nil {
+	var raw []byte
+	err := withRetry(3, func() error {
+		var buf bytes.Buffer
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if err := cl.ExecLogs(ctx, execID, stream, tail, "jsonl", &buf); err != nil {
+			return err
+		}
+		raw = append(raw[:0], buf.Bytes()...)
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
-	return parseNDJSONLogLines(buf.Bytes()), nil
+	return parseNDJSONLogLines(raw), nil
 }
 
 func parseNDJSONLogLines(b []byte) []string {
