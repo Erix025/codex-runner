@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"codex-runner/internal/codexremote/machcheck"
 )
@@ -95,5 +96,30 @@ func TestDeltaLines(t *testing.T) {
 	b, _ := json.Marshal(got)
 	if string(b) != `["d","e"]` {
 		t.Fatalf("deltaLines() = %s, want [\"d\",\"e\"]", b)
+	}
+}
+
+func TestNormalizeTimeBoundRFC3339(t *testing.T) {
+	in := "2026-01-01T00:00:00Z"
+	got, err := normalizeTimeBound(in)
+	if err != nil {
+		t.Fatalf("normalizeTimeBound() error = %v", err)
+	}
+	if got != in {
+		t.Fatalf("normalizeTimeBound() = %q, want %q", got, in)
+	}
+}
+
+func TestNormalizeTimeBoundDuration(t *testing.T) {
+	got, err := normalizeTimeBound("10m")
+	if err != nil {
+		t.Fatalf("normalizeTimeBound() error = %v", err)
+	}
+	ts, err := time.Parse(time.RFC3339Nano, got)
+	if err != nil {
+		t.Fatalf("parse output: %v", err)
+	}
+	if ts.After(time.Now().UTC()) {
+		t.Fatalf("expected past time, got %s", ts)
 	}
 }

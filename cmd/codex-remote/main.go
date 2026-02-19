@@ -66,7 +66,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  codex-remote exec run   --machine <name> --cmd <string> [--project <id> --ref <ref>] [--cwd <path>] [--env KEY=VAL ...]")
 	fmt.Fprintln(os.Stderr, "  codex-remote exec start --machine <name> --cmd <string> [--project <id> --ref <ref>] [--cwd <path>] [--env KEY=VAL ...]")
 	fmt.Fprintln(os.Stderr, "  codex-remote exec result --machine <name> --id <exec_id>")
-	fmt.Fprintln(os.Stderr, "  codex-remote exec logs --machine <name> --id <exec_id> [--stream stdout|stderr] [--tail 2000]")
+	fmt.Fprintln(os.Stderr, "  codex-remote exec logs --machine <name> --id <exec_id> [--stream stdout|stderr] [--tail 2000] [--tail-lines N] [--since RFC3339|10m] [--until RFC3339|10m]")
 	fmt.Fprintln(os.Stderr, "  codex-remote exec watch --machine <name> --id <exec_id> [--stream stdout|stderr|both] [--poll 1s]")
 	fmt.Fprintln(os.Stderr, "  codex-remote exec doctor --machine <name> [--json]")
 	fmt.Fprintln(os.Stderr, "  codex-remote exec cancel --machine <name> --id <exec_id>")
@@ -443,6 +443,9 @@ func execLogs(args []string) {
 	execID := fs.String("id", "", "exec id")
 	stream := fs.String("stream", "stdout", "stdout or stderr")
 	tailN := fs.Int64("tail", 2000, "tail bytes")
+	tailLines := fs.Int("tail-lines", 0, "tail lines")
+	since := fs.String("since", "", "lower time bound (RFC3339 or relative like 10m)")
+	until := fs.String("until", "", "upper time bound (RFC3339 or relative like 10m)")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
@@ -470,8 +473,26 @@ func execLogs(args []string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	sinceRFC3339, err := normalizeTimeBound(*since)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "--since:", err)
+		os.Exit(2)
+	}
+	untilRFC3339, err := normalizeTimeBound(*until)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "--until:", err)
+		os.Exit(2)
+	}
+	opts := client.ExecLogsOptions{
+		Stream:    *stream,
+		TailBytes: *tailN,
+		TailLines: *tailLines,
+		Since:     sinceRFC3339,
+		Until:     untilRFC3339,
+		Format:    "jsonl",
+	}
 	if err := withRetry(3, func() error {
-		return cl.ExecLogs(ctx, *execID, *stream, *tailN, "jsonl", os.Stdout)
+		return cl.ExecLogs(ctx, *execID, opts, os.Stdout)
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
