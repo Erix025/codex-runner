@@ -92,6 +92,38 @@ func (c *Client) ExecStart(ctx context.Context, r ExecStartRequest) (ExecStartRe
 	return out, nil
 }
 
+func (c *Client) ExecRun(ctx context.Context, r ExecStartRequest, w io.Writer) error {
+	b, err := json.Marshal(r)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/v1/exec/run", bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	c.addAuth(req)
+
+	hc := c.HTTP
+	if hc == nil {
+		hc = &http.Client{}
+	}
+	noTimeout := *hc
+	noTimeout.Timeout = 0
+
+	resp, err := noTimeout.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("exec run failed: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	_, err = io.Copy(w, resp.Body)
+	return err
+}
+
 func (c *Client) ExecGet(ctx context.Context, execID string) (json.RawMessage, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", c.BaseURL+"/v1/exec/"+url.PathEscape(execID), nil)
 	if err != nil {

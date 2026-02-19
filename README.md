@@ -77,6 +77,7 @@ Default config path is `~/.config/codex-remote/config.yaml`. If missing, `codex-
 ### Codex-facing commands (JSON/JSONL output)
 
 ```bash
+./codex-remote exec run    --machine gpu1 --cmd "hostname"
 ./codex-remote exec start  --machine gpu1 --cmd "nvidia-smi"
 ./codex-remote exec result --machine gpu1 --id <exec_id>
 ./codex-remote exec logs   --machine gpu1 --id <exec_id> --stream stdout --tail 2000
@@ -85,6 +86,11 @@ Default config path is `~/.config/codex-remote/config.yaml`. If missing, `codex-
 ./codex-remote update --check
 ./codex-remote update --yes
 ```
+
+Recommended execution policy:
+- Fast command: use `exec run` (synchronous JSONL event stream).
+- Long-running command: use async flow `exec start -> exec result -> exec logs`.
+- Classification is caller-controlled (for example Codex skill), not auto-detected by `codex-remote`.
 
 ### Direct tunnel rollout (machine config)
 
