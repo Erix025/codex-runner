@@ -140,7 +140,11 @@ func fetchLogLines(cl *client.Client, execID string, stream string, tail int64) 
 		var buf bytes.Buffer
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		if err := cl.ExecLogs(ctx, execID, stream, tail, "jsonl", &buf); err != nil {
+		if err := cl.ExecLogs(ctx, execID, client.ExecLogsOptions{
+			Stream:    stream,
+			TailBytes: tail,
+			Format:    "jsonl",
+		}, &buf); err != nil {
 			return err
 		}
 		raw = append(raw[:0], buf.Bytes()...)
