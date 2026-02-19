@@ -12,7 +12,7 @@ Run the full remote execution chain through one skill.
 1. Validate machine readiness.
 2. Choose execution mode (fast sync or async).
 3. For async: submit command and capture `exec_id`.
-4. For async: query result status and fetch logs on demand.
+4. For async: query result status and fetch logs/watch output.
 5. Troubleshoot automatically on errors.
 
 ## Step 1: Machine Readiness
@@ -77,19 +77,37 @@ Interpret:
 
 ## Step 5: Logs Query (Async Only)
 
-Stdout:
+Preferred unified watch:
 
 ```bash
-codex-remote exec logs --machine "$MACHINE" --id "$EXEC_ID" --stream stdout --tail 2000
+codex-remote exec watch --machine "$MACHINE" --id "$EXEC_ID" --stream both --poll 1s
+```
+
+Or explicit logs query (line-safe):
+
+```bash
+codex-remote exec logs --machine "$MACHINE" --id "$EXEC_ID" --stream stdout --tail-lines 200
 ```
 
 Stderr:
 
 ```bash
-codex-remote exec logs --machine "$MACHINE" --id "$EXEC_ID" --stream stderr --tail 2000
+codex-remote exec logs --machine "$MACHINE" --id "$EXEC_ID" --stream stderr --tail-lines 200
 ```
 
 Logs are JSONL. Parse line-by-line.
+
+Time window filters:
+
+```bash
+codex-remote exec logs --machine "$MACHINE" --id "$EXEC_ID" --stream stdout --tail-lines 500 --since 10m
+```
+
+Preflight:
+
+```bash
+codex-remote exec doctor --machine "$MACHINE" --json
+```
 
 ## Step 6: Troubleshooting Triggers
 

@@ -13,7 +13,7 @@ Do not use it for `exec run` synchronous streaming.
 - `machine` (required)
 - `exec_id` (required)
 - `stream` (optional: `stdout` or `stderr`, default `stdout`)
-- `tail` (optional, default `2000`)
+- `tail-lines` (optional, default `200`)
 
 ## Status Query
 
@@ -29,13 +29,20 @@ Interpretation:
 ## Logs Query
 
 ```bash
-codex-remote exec logs --machine "$MACHINE" --id "$EXEC_ID" --stream stdout --tail 2000
+codex-remote exec logs --machine "$MACHINE" --id "$EXEC_ID" --stream stdout --tail-lines 200
 ```
 
 Notes:
 
 - Output is JSONL (`{"type":"log","stream":"...","line":"..."}` per line).
 - For stderr, set `--stream stderr`.
+- Optional time windows: `--since 10m --until 1m`.
+
+Unified mode:
+
+```bash
+codex-remote exec watch --machine "$MACHINE" --id "$EXEC_ID" --stream both --poll 1s
+```
 
 ## Cancel
 

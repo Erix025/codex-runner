@@ -80,7 +80,9 @@ Default config path is `~/.config/codex-remote/config.yaml`. If missing, `codex-
 ./codex-remote exec run    --machine gpu1 --cmd "hostname"
 ./codex-remote exec start  --machine gpu1 --cmd "nvidia-smi"
 ./codex-remote exec result --machine gpu1 --id <exec_id>
-./codex-remote exec logs   --machine gpu1 --id <exec_id> --stream stdout --tail 2000
+./codex-remote exec logs   --machine gpu1 --id <exec_id> --stream stdout --tail-lines 200
+./codex-remote exec watch  --machine gpu1 --id <exec_id> --stream both --poll 1s
+./codex-remote exec doctor --machine gpu1 --json
 ./codex-remote exec cancel --machine gpu1 --id <exec_id>
 ./codex-remote version
 ./codex-remote update --check
@@ -91,6 +93,13 @@ Recommended execution policy:
 - Fast command: use `exec run` (synchronous JSONL event stream).
 - Long-running command: use async flow `exec start -> exec result -> exec logs`.
 - Classification is caller-controlled (for example Codex skill), not auto-detected by `codex-remote`.
+
+### Native file sync
+
+```bash
+./codex-remote sync push --machine gpu1 --src ./local-dir/ --dst ~/remote-dir/ --exclude .git --exclude node_modules
+./codex-remote sync pull --machine gpu1 --src ~/remote-dir/ --dst ./local-dir/
+```
 
 ### Direct tunnel rollout (machine config)
 
