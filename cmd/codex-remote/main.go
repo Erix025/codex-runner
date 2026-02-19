@@ -43,8 +43,6 @@ func main() {
 	switch os.Args[1] {
 	case "exec":
 		execCmd(os.Args[2:])
-	case "sync":
-		syncCmd(os.Args[2:])
 	case "machine":
 		machineCmd(os.Args[2:])
 	case "dashboard":
@@ -68,8 +66,6 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  codex-remote exec result --machine <name> --id <exec_id>")
 	fmt.Fprintln(os.Stderr, "  codex-remote exec logs --machine <name> --id <exec_id> [--stream stdout|stderr] [--tail 2000]")
 	fmt.Fprintln(os.Stderr, "  codex-remote exec cancel --machine <name> --id <exec_id>")
-	fmt.Fprintln(os.Stderr, "  codex-remote sync push --machine <name> --src <local> --dst <remote> [--delete] [--exclude PATTERN ...]")
-	fmt.Fprintln(os.Stderr, "  codex-remote sync pull --machine <name> --src <remote> --dst <local> [--delete] [--exclude PATTERN ...]")
 	fmt.Fprintln(os.Stderr, "  codex-remote machine check --machine <name>")
 	fmt.Fprintln(os.Stderr, "  codex-remote machine list [--json] [--parallel 6] [--timeout 8s]")
 	fmt.Fprintln(os.Stderr, "  codex-remote machine ls   [--json] [--parallel 6] [--timeout 8s]")
