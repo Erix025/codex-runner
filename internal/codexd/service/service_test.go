@@ -318,9 +318,41 @@ func TestExecLogsTailLinesAndTimeFilter(t *testing.T) {
 	}
 }
 
+func TestExecCollectArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataDir = dir
+	cfg.AllowedCwdRoots = []string{dir}
+	svc := service.New(cfg)
+	h := svc.Handler()
+
+	work := filepath.Join(dir, "work")
+	if err := os.MkdirAll(filepath.Join(work, ".codex"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	cmd := `cat > .codex/artifacts.json <<'JSON'
+{"version":"1","artifacts":[{"name":"report","type":"file","path":"report.md"}]}
+JSON
+echo done`
+	execID := startExecWithBody(t, h, map[string]any{
+		"cmd": cmd,
+		"cwd": work,
+	})
+	meta := waitFinished(t, h, execID, 5*time.Second)
+	arts, ok := meta["artifacts"].([]any)
+	if !ok || len(arts) != 1 {
+		t.Fatalf("expected one artifact, got %#v", meta["artifacts"])
+	}
+}
+
 func startExec(t *testing.T, h http.Handler, cmd string) string {
 	t.Helper()
 	reqBody := map[string]any{"cmd": cmd}
+	return startExecWithBody(t, h, reqBody)
+}
+
+func startExecWithBody(t *testing.T, h http.Handler, reqBody map[string]any) string {
+	t.Helper()
 	b, _ := json.Marshal(reqBody)
 	resp := do(t, h, "POST", "/v1/exec", b)
 	var out map[string]any

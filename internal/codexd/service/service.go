@@ -93,6 +93,8 @@ type execMeta struct {
 	FinishedAt string            `json:"finished_at,omitempty"`
 	ExitCode   *int              `json:"exit_code,omitempty"`
 	Error      string            `json:"error,omitempty"`
+	Artifacts  json.RawMessage   `json:"artifacts,omitempty"`
+	Warn       string            `json:"warning,omitempty"`
 }
 
 func (s *Service) handleExecStart(w http.ResponseWriter, r *http.Request) {
@@ -231,6 +233,12 @@ func (s *Service) runExec(execDir string, req execRequest, meta execMeta) {
 	meta.ExitCode = &exitCode
 	if err != nil {
 		meta.Error = err.Error()
+	}
+	if artifacts, warn := collectArtifacts(execDir, cwd); len(artifacts) > 0 {
+		meta.Artifacts = artifacts
+		meta.Warn = warn
+	} else if warn != "" {
+		meta.Warn = warn
 	}
 	_ = writeMeta(execDir, meta)
 	_ = writeExitCode(execDir, exitCode)
@@ -872,6 +880,39 @@ func extractLogTime(line []byte) (time.Time, bool) {
 		}
 	}
 	return time.Time{}, false
+}
+
+func collectArtifacts(execDir, cwd string) (json.RawMessage, string) {
+	candidates := []string{
+		filepath.Join(cwd, ".codex", "artifacts.json"),
+		filepath.Join(execDir, "artifacts.json"),
+	}
+	for _, p := range candidates {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		if !json.Valid(b) {
+			return nil, "artifacts.json is not valid JSON"
+		}
+		var obj map[string]any
+		if err := json.Unmarshal(b, &obj); err != nil {
+			return nil, "artifacts.json decode failed"
+		}
+		arts, ok := obj["artifacts"].([]any)
+		if !ok {
+			return nil, "artifacts.json missing artifacts array"
+		}
+		if len(arts) == 0 {
+			return nil, ""
+		}
+		out, err := json.Marshal(arts)
+		if err != nil {
+			return nil, "artifacts.json marshal failed"
+		}
+		return json.RawMessage(out), ""
+	}
+	return nil, ""
 }
 
 func writeErr(w http.ResponseWriter, status int, msg string) {
