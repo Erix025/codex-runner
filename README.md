@@ -53,7 +53,7 @@ export GOMODCACHE=/tmp/go-mod
 Start the daemon on the remote server:
 
 ```bash
-./codexd serve --config ~/.codexd/config.yaml
+./codexd serve
 ```
 
 Minimal config example: `examples/codexd-config.yaml`.
@@ -61,10 +61,18 @@ Minimal config example: `examples/codexd-config.yaml`.
 Notes:
 - `codexd` listens on `127.0.0.1:7337` by default (intended to be reached via SSH/VSCode port-forward).
 - Config parsing supports **JSON** and a **small YAML subset** (see `internal/shared/miniyaml` limitations).
+- Default config path is `~/.config/codexd/config.yaml`. If missing, `codexd` creates it automatically on first run.
+
+```bash
+./codexd version
+./codexd update --check
+./codexd update --yes
+```
 
 ## Local: `codex-remote`
 
 Config example: `examples/codex-remote-config.yaml`.
+Default config path is `~/.config/codex-remote/config.yaml`. If missing, `codex-remote` creates it automatically on first run.
 
 ### Codex-facing commands (JSON/JSONL output)
 
@@ -74,6 +82,9 @@ Config example: `examples/codex-remote-config.yaml`.
 ./codex-remote exec result --machine gpu1 --id <exec_id>
 ./codex-remote exec logs   --machine gpu1 --id <exec_id> --stream stdout --tail 2000
 ./codex-remote exec cancel --machine gpu1 --id <exec_id>
+./codex-remote version
+./codex-remote update --check
+./codex-remote update --yes
 ```
 
 Recommended execution policy:

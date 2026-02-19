@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -24,7 +25,12 @@ import (
 	"codex-runner/internal/codexremote/machcheck"
 	"codex-runner/internal/codexremote/sshutil"
 	"codex-runner/internal/shared/jsonutil"
+	"codex-runner/internal/shared/selfupdate"
 )
+
+var version = "dev"
+
+const defaultRemoteConfigPath = "~/.config/codex-remote/config.yaml"
 
 func main() {
 	log.SetFlags(0)
@@ -41,6 +47,10 @@ func main() {
 		machineCmd(os.Args[2:])
 	case "dashboard":
 		dashboardCmd(os.Args[2:])
+	case "update":
+		updateCmd(os.Args[2:])
+	case "version":
+		fmt.Println(version)
 	default:
 		usage()
 		os.Exit(2)
@@ -62,14 +72,69 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  codex-remote machine up --machine <name>")
 	fmt.Fprintln(os.Stderr, "  codex-remote machine ssh --machine <name> --cmd <string> [--tty]")
 	fmt.Fprintln(os.Stderr, "  codex-remote dashboard [--listen 127.0.0.1:8787]")
+	fmt.Fprintln(os.Stderr, "  codex-remote update [--check] [--yes]")
+	fmt.Fprintln(os.Stderr, "  codex-remote version")
 }
 
 func configFlag(fs *flag.FlagSet) *string {
-	return fs.String("config", "~/.config/codex-remote/config.yaml", "config file path")
+	return fs.String("config", defaultRemoteConfigPath, "config file path")
 }
 
 func loadConfig(path string) (config.Config, error) {
+	created, p, err := config.EnsureDefaultConfig(path)
+	if err != nil {
+		return config.Config{}, err
+	}
+	if created {
+		fmt.Fprintln(os.Stderr, "created default config:", p)
+	}
 	return config.Load(path)
+}
+
+func updateCmd(args []string) {
+	fs := flag.NewFlagSet("update", flag.ExitOnError)
+	checkOnly := fs.Bool("check", false, "check latest release only")
+	yes := fs.Bool("yes", false, "apply update without prompt")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	u := selfupdate.Updater{
+		BinaryName:     "codex-remote",
+		CurrentVersion: version,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	check, err := u.Check(ctx, runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "update check failed:", err)
+		os.Exit(1)
+	}
+	if *checkOnly {
+		_ = jsonutil.WriteJSON(os.Stdout, map[string]any{
+			"binary":           "codex-remote",
+			"current_version":  check.CurrentVersion,
+			"latest_version":   check.LatestVersion,
+			"comparable":       check.Comparable,
+			"update_available": check.UpdateAvailable,
+			"asset":            check.AssetName,
+		})
+		return
+	}
+	if check.Comparable && !check.UpdateAvailable {
+		fmt.Fprintf(os.Stdout, "codex-remote is up to date (%s)\n", check.CurrentVersion)
+		return
+	}
+	if !*yes {
+		fmt.Fprintf(os.Stderr, "update codex-remote from %s to %s? use --yes to confirm\n", check.CurrentVersion, check.LatestVersion)
+		os.Exit(2)
+	}
+	latest, err := u.Update(ctx, runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "update failed:", err)
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stdout, "updated codex-remote to %s\n", latest)
 }
 
 func execCmd(args []string) {

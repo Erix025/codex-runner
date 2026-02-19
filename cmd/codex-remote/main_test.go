@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -53,5 +55,26 @@ func TestWriteMachineListTable(t *testing.T) {
 		if !strings.Contains(out, c) {
 			t.Fatalf("output missing %q: %s", c, out)
 		}
+	}
+}
+
+func TestLoadConfigBootstrapsDefaultFile(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "config.yaml")
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatalf("loadConfig() error = %v", err)
+	}
+	if len(cfg.Machines) == 0 {
+		t.Fatalf("len(cfg.Machines) = 0, want >= 1")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("config file not created: %v", err)
+	}
+}
+
+func TestDefaultRemoteConfigPath(t *testing.T) {
+	if defaultRemoteConfigPath != "~/.config/codex-remote/config.yaml" {
+		t.Fatalf("defaultRemoteConfigPath = %q", defaultRemoteConfigPath)
 	}
 }
