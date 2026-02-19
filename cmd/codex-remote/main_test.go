@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,5 +77,23 @@ func TestLoadConfigBootstrapsDefaultFile(t *testing.T) {
 func TestDefaultRemoteConfigPath(t *testing.T) {
 	if defaultRemoteConfigPath != "~/.config/codex-remote/config.yaml" {
 		t.Fatalf("defaultRemoteConfigPath = %q", defaultRemoteConfigPath)
+	}
+}
+
+func TestParseNDJSONLogLines(t *testing.T) {
+	b := []byte(`{"type":"log","stream":"stdout","line":"a"}` + "\n" + `{"type":"log","stream":"stdout","line":"b"}` + "\n")
+	got := parseNDJSONLogLines(b)
+	if len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Fatalf("parseNDJSONLogLines() = %#v", got)
+	}
+}
+
+func TestDeltaLines(t *testing.T) {
+	prev := []string{"a", "b", "c"}
+	curr := []string{"b", "c", "d", "e"}
+	got := deltaLines(prev, curr)
+	b, _ := json.Marshal(got)
+	if string(b) != `["d","e"]` {
+		t.Fatalf("deltaLines() = %s, want [\"d\",\"e\"]", b)
 	}
 }

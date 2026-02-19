@@ -67,6 +67,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  codex-remote exec start --machine <name> --cmd <string> [--project <id> --ref <ref>] [--cwd <path>] [--env KEY=VAL ...]")
 	fmt.Fprintln(os.Stderr, "  codex-remote exec result --machine <name> --id <exec_id>")
 	fmt.Fprintln(os.Stderr, "  codex-remote exec logs --machine <name> --id <exec_id> [--stream stdout|stderr] [--tail 2000]")
+	fmt.Fprintln(os.Stderr, "  codex-remote exec watch --machine <name> --id <exec_id> [--stream stdout|stderr|both] [--poll 1s]")
 	fmt.Fprintln(os.Stderr, "  codex-remote exec doctor --machine <name> [--json]")
 	fmt.Fprintln(os.Stderr, "  codex-remote exec cancel --machine <name> --id <exec_id>")
 	fmt.Fprintln(os.Stderr, "  codex-remote sync push --machine <name> --src <local> --dst <remote> [--delete] [--exclude PATTERN ...]")
@@ -156,6 +157,8 @@ func execCmd(args []string) {
 		execResult(args[1:])
 	case "logs":
 		execLogs(args[1:])
+	case "watch":
+		execWatch(args[1:])
 	case "doctor":
 		execDoctor(args[1:])
 	case "cancel":
