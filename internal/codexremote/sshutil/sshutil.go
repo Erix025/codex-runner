@@ -190,16 +190,7 @@ func RunSSH(ctx context.Context, sshTarget string, remoteCmd string) (RunResult,
 }
 
 func RunSSHWithOptions(ctx context.Context, sshTarget string, remoteCmd string, forwardAgent bool, tty bool) (RunResult, error) {
-	args := []string{
-		"-o", "BatchMode=yes",
-		"-o", "ConnectTimeout=5",
-	}
-	if forwardAgent {
-		args = append(args, "-A")
-	}
-	if tty {
-		args = append(args, "-tt")
-	}
+	args := BuildSSHArgs(forwardAgent, tty)
 	args = append(args, sshTarget, remoteCmd)
 	cmd := exec.CommandContext(ctx, "ssh", args...)
 	var stdout, stderr bytes.Buffer
@@ -219,4 +210,18 @@ func RunSSHWithOptions(ctx context.Context, sshTarget string, remoteCmd string, 
 		Stderr: stderr.String(),
 		Code:   code,
 	}, err
+}
+
+func BuildSSHArgs(forwardAgent bool, tty bool) []string {
+	args := []string{
+		"-o", "BatchMode=yes",
+		"-o", "ConnectTimeout=5",
+	}
+	if forwardAgent {
+		args = append(args, "-A")
+	}
+	if tty {
+		args = append(args, "-tt")
+	}
+	return args
 }
