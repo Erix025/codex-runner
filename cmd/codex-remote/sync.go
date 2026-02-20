@@ -1,10 +1,10 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -76,8 +76,15 @@ func runSync(mode string, args []string) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	if _, err := sshutil.RunSSH(ctx, m.SSH, "command -v rsync >/dev/null 2>&1"); err != nil {
-		fmt.Fprintln(os.Stderr, "sync failed: remote rsync is not installed")
+	if probe, err := sshutil.RunSSH(ctx, m.SSH, "command -v rsync >/dev/null 2>&1"); err != nil {
+		msg := strings.TrimSpace(probe.Stderr)
+		if msg == "" {
+			msg = strings.TrimSpace(probe.Stdout)
+		}
+		if msg == "" {
+			msg = err.Error()
+		}
+		fmt.Fprintln(os.Stderr, "sync failed: remote rsync probe failed:", msg)
 		os.Exit(1)
 	}
 
@@ -100,10 +107,12 @@ func runSync(mode string, args []string) {
 	}
 
 	cmd := exec.Command("rsync", rsyncArgs...)
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdoutTail := newTailBuffer(128 * 1024)
+	stderrTail := newTailBuffer(128 * 1024)
+	// Stream rsync output live to stderr so long-running sync does not look stuck,
+	// while retaining bounded tails for JSON diagnostics.
+	cmd.Stdout = io.MultiWriter(stdoutTail, os.Stderr)
+	cmd.Stderr = io.MultiWriter(stderrTail, os.Stderr)
 	err = cmd.Run()
 	code := 0
 	if err != nil {
@@ -122,10 +131,47 @@ func runSync(mode string, args []string) {
 		"delete":  *deleteExtra,
 		"exclude": []string(excludes),
 		"code":    code,
-		"stdout":  stdout.String(),
-		"stderr":  stderr.String(),
+		"stdout":  stdoutTail.String(),
+		"stderr":  stderrTail.String(),
 	})
 	if err != nil {
 		os.Exit(1)
 	}
+}
+
+type tailBuffer struct {
+	limit int
+	buf   []byte
+}
+
+func newTailBuffer(limit int) *tailBuffer {
+	if limit < 0 {
+		limit = 0
+	}
+	return &tailBuffer{limit: limit}
+}
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	if t.limit == 0 || n == 0 {
+		return n, nil
+	}
+	if n >= t.limit {
+		t.buf = append(t.buf[:0], p[n-t.limit:]...)
+		return n, nil
+	}
+	need := len(t.buf) + n - t.limit
+	if need > 0 {
+		copy(t.buf, t.buf[need:])
+		t.buf = t.buf[:len(t.buf)-need]
+	}
+	t.buf = append(t.buf, p...)
+	return n, nil
+}
+
+func (t *tailBuffer) String() string {
+	if t == nil {
+		return ""
+	}
+	return string(t.buf)
 }
