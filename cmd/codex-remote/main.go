@@ -266,7 +266,15 @@ func execResult(args []string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	b, err := cl.ExecGet(ctx, *execID)
+	var b json.RawMessage
+	err = withRetry(3, func() error {
+		out, callErr := cl.ExecGet(ctx, *execID)
+		if callErr != nil {
+			return callErr
+		}
+		b = out
+		return nil
+	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -321,7 +329,9 @@ func execLogs(args []string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := cl.ExecLogs(ctx, *execID, *stream, *tailN, "jsonl", os.Stdout); err != nil {
+	if err := withRetry(3, func() error {
+		return cl.ExecLogs(ctx, *execID, *stream, *tailN, "jsonl", os.Stdout)
+	}); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -760,6 +770,12 @@ func isRetryableExecErr(err error) bool {
 		return true
 	}
 	if strings.Contains(msg, "timeout") {
+		return true
+	}
+	if strings.Contains(msg, "read |0: file already closed") {
+		return true
+	}
+	if strings.Contains(msg, "file already closed") {
 		return true
 	}
 	return false
