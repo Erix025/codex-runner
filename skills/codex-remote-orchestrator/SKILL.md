@@ -12,7 +12,7 @@ Run the full remote execution chain through one skill.
 1. Validate machine readiness.
 2. Submit command and capture `exec_id`.
 3. Query result status.
-4. Fetch logs on demand.
+4. Watch/log retrieval.
 5. Troubleshoot automatically on errors.
 
 ## Step 1: Machine Readiness
@@ -61,19 +61,37 @@ Interpret:
 
 ## Step 4: Logs Query
 
-Stdout:
+Preferred unified watch:
 
 ```bash
-codex-remote exec logs --machine "$MACHINE" --id "$EXEC_ID" --stream stdout --tail 2000
+codex-remote exec watch --machine "$MACHINE" --id "$EXEC_ID" --stream both --poll 1s
+```
+
+Or explicit logs query (line-safe):
+
+```bash
+codex-remote exec logs --machine "$MACHINE" --id "$EXEC_ID" --stream stdout --tail-lines 200
 ```
 
 Stderr:
 
 ```bash
-codex-remote exec logs --machine "$MACHINE" --id "$EXEC_ID" --stream stderr --tail 2000
+codex-remote exec logs --machine "$MACHINE" --id "$EXEC_ID" --stream stderr --tail-lines 200
 ```
 
 Logs are JSONL. Parse line-by-line.
+
+Time window filters:
+
+```bash
+codex-remote exec logs --machine "$MACHINE" --id "$EXEC_ID" --stream stdout --tail-lines 500 --since 10m
+```
+
+Preflight:
+
+```bash
+codex-remote exec doctor --machine "$MACHINE" --json
+```
 
 ## Step 5: Troubleshooting Triggers
 
@@ -101,4 +119,3 @@ When interacting with user or agent caller, keep this structure:
 4. `exit_code` (if finished)
 5. optional `stdout_tail` / `stderr_tail`
 6. next action (`wait`, `done`, or `fix-config`)
-
