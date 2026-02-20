@@ -92,7 +92,7 @@ jobs:
         run: |
           set -euo pipefail
           cd dist
-          find . -type f \( -name 'codex-*' -o -name 'codex-*.exe' \) | sort | while read -r f; do
+          find . -type f \( -name 'codex-*' -o -name 'codex-*.exe' -o -name 'codexd' -o -name 'codexd.exe' \) | sort | while read -r f; do
             sha256sum "$f"
           done > SHA256SUMS
 
