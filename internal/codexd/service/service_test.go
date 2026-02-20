@@ -116,6 +116,27 @@ func TestRetentionCount(t *testing.T) {
 	}
 }
 
+func TestExecLogsTailLinesAndTimeFilter(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataDir = dir
+	svc := service.New(cfg)
+	h := svc.Handler()
+
+	cmd := `echo '{"time":"2026-01-01T00:00:00Z","msg":"old"}'; echo '{"time":"2026-01-01T01:00:00Z","msg":"new"}'`
+	execID := startExec(t, h, cmd)
+	_ = waitFinished(t, h, execID, 5*time.Second)
+
+	body := do(t, h, "GET", "/v1/exec/"+execID+"/logs?stream=stdout&tail_lines=10&since=2026-01-01T00:30:00Z&format=jsonl", nil)
+	if bytes.Contains(body, []byte(`\"msg\":\"old\"`)) {
+		t.Fatalf("expected old log to be filtered out: %s", string(body))
+	}
+	if !bytes.Contains(body, []byte(`\"msg\":\"new\"`)) {
+		t.Fatalf("expected new log in output: %s", string(body))
+	}
+}
+
 func startExec(t *testing.T, h http.Handler, cmd string) string {
 	t.Helper()
 	reqBody := map[string]any{"cmd": cmd}
