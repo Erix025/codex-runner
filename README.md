@@ -2,6 +2,27 @@
 
 `codexd` (remote daemon) + `codex-remote` (local CLI + dashboard) to let the local Codex app execute commands on a remote GPU server via SSH / port-forwarding.
 
+## Install
+
+- macOS/Linux (default to $HOME/bin):
+  - codex-remote: curl -fsSL https://raw.githubusercontent.com/Erix025/codex-runner/main/install-codex-remote.sh | bash
+  - codexd:      curl -fsSL https://raw.githubusercontent.com/Erix025/codex-runner/main/install-codexd.sh | bash
+
+- Custom dir example:
+  - INSTALL_DIR=$HOME/.local/bin bash -c "$(curl -fsSL https://raw.githubusercontent.com/Erix025/codex-runner/main/install-codex-remote.sh)"
+
+- Pin to a specific version (tag):
+  - VERSION=v0.1.2 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Erix025/codex-runner/main/install-codexd.sh)"
+
+- Flags (also via env): --dir, --version, --repo, --no-verify, --no-overwrite, --quiet.
+
+- PATH hint: installers target $HOME/bin by default; add it to PATH if missing.
+  - macOS zsh: echo "export PATH=\"$HOME/bin:$PATH\"" >> ~/.zshrc && source ~/.zshrc
+  - Linux bash: echo "export PATH=\"$HOME/bin:$PATH\"" >> ~/.bashrc && source ~/.bashrc
+
+- Windows: use WSL or download the .exe assets from Releases.
+
+
 ## Build
 
 ```bash
