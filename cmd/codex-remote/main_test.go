@@ -2,10 +2,12 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"codex-runner/internal/codexremote/machcheck"
 )
@@ -76,5 +78,48 @@ func TestLoadConfigBootstrapsDefaultFile(t *testing.T) {
 func TestDefaultRemoteConfigPath(t *testing.T) {
 	if defaultRemoteConfigPath != "~/.config/codex-remote/config.yaml" {
 		t.Fatalf("defaultRemoteConfigPath = %q", defaultRemoteConfigPath)
+	}
+}
+
+func TestParseNDJSONLogLines(t *testing.T) {
+	b := []byte(`{"type":"log","stream":"stdout","line":"a"}` + "\n" + `{"type":"log","stream":"stdout","line":"b"}` + "\n")
+	got := parseNDJSONLogLines(b)
+	if len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Fatalf("parseNDJSONLogLines() = %#v", got)
+	}
+}
+
+func TestDeltaLines(t *testing.T) {
+	prev := []string{"a", "b", "c"}
+	curr := []string{"b", "c", "d", "e"}
+	got := deltaLines(prev, curr)
+	b, _ := json.Marshal(got)
+	if string(b) != `["d","e"]` {
+		t.Fatalf("deltaLines() = %s, want [\"d\",\"e\"]", b)
+	}
+}
+
+func TestNormalizeTimeBoundRFC3339(t *testing.T) {
+	in := "2026-01-01T00:00:00Z"
+	got, err := normalizeTimeBound(in)
+	if err != nil {
+		t.Fatalf("normalizeTimeBound() error = %v", err)
+	}
+	if got != in {
+		t.Fatalf("normalizeTimeBound() = %q, want %q", got, in)
+	}
+}
+
+func TestNormalizeTimeBoundDuration(t *testing.T) {
+	got, err := normalizeTimeBound("10m")
+	if err != nil {
+		t.Fatalf("normalizeTimeBound() error = %v", err)
+	}
+	ts, err := time.Parse(time.RFC3339Nano, got)
+	if err != nil {
+		t.Fatalf("parse output: %v", err)
+	}
+	if ts.After(time.Now().UTC()) {
+		t.Fatalf("expected past time, got %s", ts)
 	}
 }

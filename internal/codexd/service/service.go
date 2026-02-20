@@ -93,6 +93,8 @@ type execMeta struct {
 	FinishedAt string            `json:"finished_at,omitempty"`
 	ExitCode   *int              `json:"exit_code,omitempty"`
 	Error      string            `json:"error,omitempty"`
+	Artifacts  json.RawMessage   `json:"artifacts,omitempty"`
+	Warn       string            `json:"warning,omitempty"`
 }
 
 func (s *Service) handleExecStart(w http.ResponseWriter, r *http.Request) {
@@ -231,6 +233,12 @@ func (s *Service) runExec(execDir string, req execRequest, meta execMeta) {
 	meta.ExitCode = &exitCode
 	if err != nil {
 		meta.Error = err.Error()
+	}
+	if artifacts, warn := collectArtifacts(execDir, cwd); len(artifacts) > 0 {
+		meta.Artifacts = artifacts
+		meta.Warn = warn
+	} else if warn != "" {
+		meta.Warn = warn
 	}
 	_ = writeMeta(execDir, meta)
 	_ = writeExitCode(execDir, exitCode)
@@ -498,16 +506,45 @@ func (s *Service) handleExecLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tailStr := r.URL.Query().Get("tail")
+	tailLinesStr := r.URL.Query().Get("tail_lines")
 	var maxBytes int64 = 2000
+	var maxLines int
 	if tailStr != "" {
 		if n, err := strconv.ParseInt(tailStr, 10, 64); err == nil && n >= 0 {
 			maxBytes = n
 		}
 	}
+	if tailLinesStr != "" {
+		n, err := strconv.Atoi(tailLinesStr)
+		if err != nil || n < 0 {
+			writeErr(w, http.StatusBadRequest, "tail_lines must be >= 0")
+			return
+		}
+		maxLines = n
+	}
+	sinceFilter, err := parseRFC3339(r.URL.Query().Get("since"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "since must be RFC3339")
+		return
+	}
+	untilFilter, err := parseRFC3339(r.URL.Query().Get("until"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "until must be RFC3339")
+		return
+	}
 	format := r.URL.Query().Get("format") // "" or "jsonl"
 
 	path := filepath.Join(execDir, stream+".log")
-	b, err := tail.ReadTailBytes(path, maxBytes)
+	var b []byte
+	if maxLines > 0 {
+		b, err = tail.ReadTailLines(path, maxLines)
+	} else if tailStr != "" {
+		b, err = tail.ReadTailBytes(path, maxBytes)
+	} else if sinceFilter != nil || untilFilter != nil {
+		b, err = tail.ReadAll(path)
+	} else {
+		b, err = tail.ReadTailBytes(path, maxBytes)
+	}
 	if err != nil {
 		if os.IsNotExist(err) {
 			b = []byte{}
@@ -516,14 +553,15 @@ func (s *Service) handleExecLogs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	filtered := filterLogLinesByTime(bytes.Split(b, []byte{'\n'}), sinceFilter, untilFilter)
+	b = bytes.Join(filtered, []byte{'\n'})
 	if format != "jsonl" {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write(b)
 		return
 	}
 	w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
-	lines := bytes.Split(b, []byte{'\n'})
-	for _, line := range lines {
+	for _, line := range filtered {
 		if len(line) == 0 {
 			continue
 		}
@@ -783,6 +821,98 @@ func readPID(execDir string) (int, error) {
 		return 0, err
 	}
 	return n, nil
+}
+
+func parseRFC3339(v string) (*time.Time, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return nil, nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, v)
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+func filterLogLinesByTime(lines [][]byte, since, until *time.Time) [][]byte {
+	if since == nil && until == nil {
+		return lines
+	}
+	out := make([][]byte, 0, len(lines))
+	for _, line := range lines {
+		if len(line) == 0 {
+			continue
+		}
+		ts, ok := extractLogTime(line)
+		if !ok {
+			out = append(out, line)
+			continue
+		}
+		if since != nil && ts.Before(*since) {
+			continue
+		}
+		if until != nil && ts.After(*until) {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+func extractLogTime(line []byte) (time.Time, bool) {
+	var obj map[string]any
+	if err := json.Unmarshal(line, &obj); err != nil {
+		return time.Time{}, false
+	}
+	for _, key := range []string{"ts", "time", "timestamp", "@timestamp"} {
+		raw, ok := obj[key]
+		if !ok {
+			continue
+		}
+		s, ok := raw.(string)
+		if !ok {
+			continue
+		}
+		t, err := time.Parse(time.RFC3339Nano, s)
+		if err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
+func collectArtifacts(execDir, cwd string) (json.RawMessage, string) {
+	candidates := []string{
+		filepath.Join(cwd, ".codex", "artifacts.json"),
+		filepath.Join(execDir, "artifacts.json"),
+	}
+	for _, p := range candidates {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		if !json.Valid(b) {
+			return nil, "artifacts.json is not valid JSON"
+		}
+		var obj map[string]any
+		if err := json.Unmarshal(b, &obj); err != nil {
+			return nil, "artifacts.json decode failed"
+		}
+		arts, ok := obj["artifacts"].([]any)
+		if !ok {
+			return nil, "artifacts.json missing artifacts array"
+		}
+		if len(arts) == 0 {
+			return nil, ""
+		}
+		out, err := json.Marshal(arts)
+		if err != nil {
+			return nil, "artifacts.json marshal failed"
+		}
+		return json.RawMessage(out), ""
+	}
+	return nil, ""
 }
 
 func writeErr(w http.ResponseWriter, status int, msg string) {

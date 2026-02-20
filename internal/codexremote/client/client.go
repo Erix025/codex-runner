@@ -44,6 +44,15 @@ type ExecStartResponse struct {
 	Status string `json:"status"`
 }
 
+type ExecLogsOptions struct {
+	Stream    string
+	TailBytes int64
+	TailLines int
+	Since     string
+	Until     string
+	Format    string
+}
+
 func (c *Client) Health(ctx context.Context) (map[string]any, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", c.BaseURL+"/health", nil)
 	if err != nil {
@@ -166,17 +175,26 @@ func (c *Client) ExecCancel(ctx context.Context, execID string) (json.RawMessage
 	return json.RawMessage(b), nil
 }
 
-func (c *Client) ExecLogs(ctx context.Context, execID string, stream string, tail int64, format string, w io.Writer) error {
+func (c *Client) ExecLogs(ctx context.Context, execID string, opts ExecLogsOptions, w io.Writer) error {
 	u := c.BaseURL + "/v1/exec/" + url.PathEscape(execID) + "/logs"
 	q := url.Values{}
-	if stream != "" {
-		q.Set("stream", stream)
+	if opts.Stream != "" {
+		q.Set("stream", opts.Stream)
 	}
-	if tail >= 0 {
-		q.Set("tail", fmt.Sprintf("%d", tail))
+	if opts.TailBytes >= 0 {
+		q.Set("tail", fmt.Sprintf("%d", opts.TailBytes))
 	}
-	if format != "" {
-		q.Set("format", format)
+	if opts.TailLines > 0 {
+		q.Set("tail_lines", fmt.Sprintf("%d", opts.TailLines))
+	}
+	if opts.Since != "" {
+		q.Set("since", opts.Since)
+	}
+	if opts.Until != "" {
+		q.Set("until", opts.Until)
+	}
+	if opts.Format != "" {
+		q.Set("format", opts.Format)
 	}
 	if strings.Contains(u, "?") {
 		u += "&" + q.Encode()

@@ -297,9 +297,62 @@ func TestExecRunPersistsArtifacts(t *testing.T) {
 	}
 }
 
+func TestExecLogsTailLinesAndTimeFilter(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataDir = dir
+	svc := service.New(cfg)
+	h := svc.Handler()
+
+	cmd := `echo '{"time":"2026-01-01T00:00:00Z","msg":"old"}'; echo '{"time":"2026-01-01T01:00:00Z","msg":"new"}'`
+	execID := startExec(t, h, cmd)
+	_ = waitFinished(t, h, execID, 5*time.Second)
+
+	body := do(t, h, "GET", "/v1/exec/"+execID+"/logs?stream=stdout&tail_lines=10&since=2026-01-01T00:30:00Z&format=jsonl", nil)
+	if bytes.Contains(body, []byte(`\"msg\":\"old\"`)) {
+		t.Fatalf("expected old log to be filtered out: %s", string(body))
+	}
+	if !bytes.Contains(body, []byte(`\"msg\":\"new\"`)) {
+		t.Fatalf("expected new log in output: %s", string(body))
+	}
+}
+
+func TestExecCollectArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataDir = dir
+	cfg.AllowedCwdRoots = []string{dir}
+	svc := service.New(cfg)
+	h := svc.Handler()
+
+	work := filepath.Join(dir, "work")
+	if err := os.MkdirAll(filepath.Join(work, ".codex"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	cmd := `cat > .codex/artifacts.json <<'JSON'
+{"version":"1","artifacts":[{"name":"report","type":"file","path":"report.md"}]}
+JSON
+echo done`
+	execID := startExecWithBody(t, h, map[string]any{
+		"cmd": cmd,
+		"cwd": work,
+	})
+	meta := waitFinished(t, h, execID, 5*time.Second)
+	arts, ok := meta["artifacts"].([]any)
+	if !ok || len(arts) != 1 {
+		t.Fatalf("expected one artifact, got %#v", meta["artifacts"])
+	}
+}
+
 func startExec(t *testing.T, h http.Handler, cmd string) string {
 	t.Helper()
 	reqBody := map[string]any{"cmd": cmd}
+	return startExecWithBody(t, h, reqBody)
+}
+
+func startExecWithBody(t *testing.T, h http.Handler, reqBody map[string]any) string {
+	t.Helper()
 	b, _ := json.Marshal(reqBody)
 	resp := do(t, h, "POST", "/v1/exec", b)
 	var out map[string]any
