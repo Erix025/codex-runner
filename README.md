@@ -69,6 +69,16 @@ export GOCACHE=/tmp/go-cache
 export GOMODCACHE=/tmp/go-mod
 ```
 
+## Contribution Workflow
+
+Issue fixes must follow the standardized flow:
+- sync `main` first (`git fetch origin --prune`, `git checkout main`, `git pull --ff-only origin main`)
+- create branch from `main`: `codex/issue-<id>-<slug>`
+- run local quality gates before commit: `go test ./...` and `make build-all`
+- open PR to `main` with title `fix(issue-<id>): <summary>` and include `Closes #<id>` in body
+
+See `CONTRIBUTING.md` for the full policy and examples.
+
 ## Remote: `codexd`
 
 Start the daemon on the remote server:
