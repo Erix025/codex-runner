@@ -11,7 +11,7 @@ import (
 
 	"codex-runner/internal/codexremote/config"
 	"codex-runner/internal/codexremote/machcheck"
-	"codex-runner/internal/codexremote/sshutil"
+	"codex-runner/internal/codexremote/machineup"
 	"codex-runner/internal/shared/jsonutil"
 )
 
@@ -154,16 +154,13 @@ func (s *Server) handleMachineUp(w http.ResponseWriter, r *http.Request) {
 		_ = jsonutil.WriteJSON(w, map[string]any{"error": "machine.ssh is required"})
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 	defer cancel()
-	res, err := sshutil.RunSSH(ctx, m.SSH, m.DaemonCmd)
-	okay := err == nil
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"ok":     okay,
-		"stdout": res.Stdout,
-		"stderr": res.Stderr,
-		"code":   res.Code,
-	})
+	up := machineup.Start(ctx, *m)
+	if !up.OK {
+		w.WriteHeader(http.StatusBadGateway)
+	}
+	_ = json.NewEncoder(w).Encode(up)
 }
 
 func (s *Server) getCachedOrCheck(ctx context.Context, m config.Machine) machcheck.Status {

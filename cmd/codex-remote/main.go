@@ -23,6 +23,7 @@ import (
 	"codex-runner/internal/codexremote/config"
 	"codex-runner/internal/codexremote/dashboard"
 	"codex-runner/internal/codexremote/machcheck"
+	"codex-runner/internal/codexremote/machineup"
 	"codex-runner/internal/codexremote/sshutil"
 	"codex-runner/internal/shared/jsonutil"
 	"codex-runner/internal/shared/selfupdate"
@@ -615,15 +616,13 @@ func machineUp(args []string) {
 		fmt.Fprintln(os.Stderr, "machine.ssh is required")
 		os.Exit(2)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
-	res, err := sshutil.RunSSH(ctx, m.SSH, m.DaemonCmd)
-	_ = json.NewEncoder(os.Stdout).Encode(map[string]any{
-		"ok":     err == nil,
-		"stdout": res.Stdout,
-		"stderr": res.Stderr,
-		"code":   res.Code,
-	})
+	up := machineup.Start(ctx, *m)
+	_ = json.NewEncoder(os.Stdout).Encode(up)
+	if !up.OK {
+		os.Exit(1)
+	}
 }
 
 func machineList(args []string) {
