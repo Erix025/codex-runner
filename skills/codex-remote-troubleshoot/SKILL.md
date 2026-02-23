@@ -11,9 +11,10 @@ Use this skill for fast triage when command execution fails.
 
 1. Validate machine profile exists in local config.
 2. Run `machine check`.
-3. Verify local direct addr vs SSH forwarding path.
-4. Retry with a tiny command (`hostname`).
-5. Inspect remote daemon logs if available.
+3. Interpret check result: `daemon_ok=true` means runnable (even if `ssh_ok=false` in addr-only mode).
+4. Verify local direct addr vs SSH forwarding path only when `daemon_ok=false`.
+5. Retry with a tiny command (`hostname`).
+6. Inspect remote daemon logs if available.
 
 ## Common Errors And Fixes
 
@@ -33,4 +34,3 @@ codex-remote exec start --machine "$MACHINE" --cmd "hostname"
 ```
 
 If submission succeeds, use result/logs to complete chain.
-
