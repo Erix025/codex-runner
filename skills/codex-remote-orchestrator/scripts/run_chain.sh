@@ -15,7 +15,7 @@ echo "# machine check"
 check="$(codex-remote machine check --machine "$machine")"
 echo "$check"
 
-if echo "$check" | rg -q '"daemon_ok"\s*:\s*false'; then
+if echo "$check" | rg -q '"daemon_ok"\s*:\s*false' && echo "$check" | rg -q '"ssh_ok"\s*:\s*true'; then
   echo "# machine up"
   codex-remote machine up --machine "$machine"
   codex-remote machine check --machine "$machine"
@@ -27,4 +27,3 @@ if [[ -n "$project" ]]; then
 else
   codex-remote exec start --machine "$machine" --cmd "$cmd"
 fi
-

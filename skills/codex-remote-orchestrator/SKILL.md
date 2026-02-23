@@ -30,7 +30,7 @@ codex-remote machine up --machine "$MACHINE"
 codex-remote machine check --machine "$MACHINE"
 ```
 
-Abort only if SSH remains unreachable.
+Only do this when `ssh_ok=true`. If `ssh_ok=false`, treat it as addr-only/direct-path troubleshooting and verify `addr`/port-forward instead of calling `machine up`.
 
 ## Step 2: Choose Mode
 
@@ -130,6 +130,7 @@ codex-remote exec start --machine "$MACHINE" --cmd "hostname"
 When interacting with user or agent caller, keep this structure:
 
 1. `machine` and readiness (`ssh_ok`, `daemon_ok`)
+   - `daemon_ok=true` is the execution gate (SSH may be false for addr-only machines)
 2. `mode` (`run` or `async`)
 3. `exec_id` (async only)
 4. `status`

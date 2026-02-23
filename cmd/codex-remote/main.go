@@ -29,8 +29,20 @@ import (
 )
 
 var version = "dev"
+var runSSHFn = sshutil.RunSSH
+var machineCheckFn = machcheck.Check
 
 const defaultRemoteConfigPath = "~/.config/codex-remote/config.yaml"
+
+type machineUpResponse struct {
+	OK      bool   `json:"ok"`
+	Stage   string `json:"stage,omitempty"`
+	Message string `json:"message,omitempty"`
+	Hint    string `json:"hint,omitempty"`
+	Stdout  string `json:"stdout,omitempty"`
+	Stderr  string `json:"stderr,omitempty"`
+	Code    int    `json:"code,omitempty"`
+}
 
 func main() {
 	log.SetFlags(0)
@@ -617,13 +629,95 @@ func machineUp(args []string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	res, err := sshutil.RunSSH(ctx, m.SSH, m.DaemonCmd)
-	_ = json.NewEncoder(os.Stdout).Encode(map[string]any{
-		"ok":     err == nil,
-		"stdout": res.Stdout,
-		"stderr": res.Stderr,
-		"code":   res.Code,
-	})
+	resp, exitCode := runMachineUp(ctx, *m)
+	_ = json.NewEncoder(os.Stdout).Encode(resp)
+	if exitCode != 0 {
+		os.Exit(exitCode)
+	}
+}
+
+func runMachineUp(ctx context.Context, m config.Machine) (machineUpResponse, int) {
+	if strings.TrimSpace(m.SSH) == "" {
+		return machineUpResponse{
+			OK:      false,
+			Stage:   "validate",
+			Message: "machine.ssh is required",
+			Hint:    "set machine.ssh in config and retry",
+		}, 2
+	}
+
+	preCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
+	pre := machineCheckFn(preCtx, m)
+	cancel()
+	if pre.DaemonOK {
+		return machineUpResponse{
+			OK:      true,
+			Stage:   "precheck",
+			Message: "daemon is already healthy",
+		}, 0
+	}
+	if !pre.SSHOK {
+		msg := strings.TrimSpace(pre.Error)
+		if msg == "" {
+			msg = "ssh not reachable"
+		}
+		return machineUpResponse{
+			OK:      false,
+			Stage:   "precheck",
+			Message: msg,
+			Hint:    "fix SSH connectivity first, then rerun `codex-remote machine check --machine " + m.Name + "`",
+		}, 1
+	}
+
+	res, err := runSSHFn(ctx, m.SSH, m.DaemonCmd)
+	if err != nil {
+		msg := strings.TrimSpace(res.Stderr)
+		if msg == "" {
+			msg = err.Error()
+		}
+		return machineUpResponse{
+			OK:      false,
+			Stage:   "start",
+			Message: msg,
+			Hint:    "verify machine.daemon_cmd and remote shell env, then inspect /tmp/codexd.log on remote host",
+			Stdout:  res.Stdout,
+			Stderr:  res.Stderr,
+			Code:    res.Code,
+		}, 1
+	}
+
+	var lastErr string
+	for i := 0; i < 3; i++ {
+		if i > 0 {
+			time.Sleep(500 * time.Millisecond)
+		}
+		checkCtx, checkCancel := context.WithTimeout(ctx, 5*time.Second)
+		st := machineCheckFn(checkCtx, m)
+		checkCancel()
+		if st.DaemonOK {
+			return machineUpResponse{
+				OK:      true,
+				Stage:   "verify",
+				Message: "daemon started and health check passed",
+				Stdout:  res.Stdout,
+				Stderr:  res.Stderr,
+				Code:    res.Code,
+			}, 0
+		}
+		lastErr = strings.TrimSpace(st.Error)
+	}
+	if lastErr == "" {
+		lastErr = "daemon not healthy after start command"
+	}
+	return machineUpResponse{
+		OK:      false,
+		Stage:   "verify",
+		Message: lastErr,
+		Hint:    "check remote daemon logs (/tmp/codexd.log) and run `codex-remote machine check --machine " + m.Name + "`",
+		Stdout:  res.Stdout,
+		Stderr:  res.Stderr,
+		Code:    res.Code,
+	}, 1
 }
 
 func machineList(args []string) {
@@ -710,7 +804,7 @@ func machineListSummary(statuses []machcheck.Status) machineSummary {
 		if st.DaemonOK {
 			s.DaemonOK++
 		}
-		if !st.SSHOK || !st.DaemonOK {
+		if !st.DaemonOK || strings.TrimSpace(st.Error) != "" {
 			s.Failed++
 		}
 	}

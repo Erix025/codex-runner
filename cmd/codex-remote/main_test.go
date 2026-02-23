@@ -17,17 +17,18 @@ func TestMachineListSummary(t *testing.T) {
 		{Name: "a", SSHOK: true, DaemonOK: true},
 		{Name: "b", SSHOK: true, DaemonOK: false},
 		{Name: "c", SSHOK: false, DaemonOK: false},
+		{Name: "d", SSHOK: false, DaemonOK: true},
 	}
 
 	s := machineListSummary(statuses)
-	if s.Total != 3 {
-		t.Fatalf("Total = %d, want 3", s.Total)
+	if s.Total != 4 {
+		t.Fatalf("Total = %d, want 4", s.Total)
 	}
 	if s.SSHOK != 2 {
 		t.Fatalf("SSHOK = %d, want 2", s.SSHOK)
 	}
-	if s.DaemonOK != 1 {
-		t.Fatalf("DaemonOK = %d, want 1", s.DaemonOK)
+	if s.DaemonOK != 2 {
+		t.Fatalf("DaemonOK = %d, want 2", s.DaemonOK)
 	}
 	if s.Failed != 2 {
 		t.Fatalf("Failed = %d, want 2", s.Failed)
