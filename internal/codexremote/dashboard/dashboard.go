@@ -61,7 +61,7 @@ var indexTmpl = template.Must(template.New("index").Parse(`
   </head>
   <body>
     <h2>Machines</h2>
-    <p>Checks: SSH reachable + daemon <code>/health</code> on <code>127.0.0.1:&lt;port&gt;</code>.</p>
+	    <p>Checks: SSH reachable or direct <code>addr</code>, plus daemon <code>/health</code>.</p>
     <table>
       <thead>
         <tr><th>Name</th><th>SSH</th><th>Daemon</th><th>Latency</th><th>Last Check</th><th>Actions</th></tr>

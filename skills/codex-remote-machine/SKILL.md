@@ -19,9 +19,9 @@ codex-remote machine check --machine "$MACHINE"
 
 Interpretation:
 
-- `ssh_ok=true` and `daemon_ok=true`: ready for execution.
-- `ssh_ok=false`: SSH path is broken or host is unreachable.
-- `ssh_ok=true` but `daemon_ok=false`: remote daemon is down or unhealthy.
+- `daemon_ok=true`: ready for execution (this includes addr-only machines with `ssh_ok=false`).
+- `daemon_ok=false` and `ssh_ok=true`: remote daemon is down/unhealthy; can try `machine up`.
+- `daemon_ok=false` and `ssh_ok=false`: neither SSH nor direct addr health path is usable.
 
 ## Start Remote Daemon
 
@@ -29,7 +29,7 @@ Interpretation:
 codex-remote machine up --machine "$MACHINE"
 ```
 
-Then run check again.
+Only run `machine up` when SSH is configured/reachable. For addr-only machines, fix local port-forward or `addr` first, then run check again.
 
 ## Dashboard
 
@@ -38,4 +38,3 @@ codex-remote dashboard --listen 127.0.0.1:8787
 ```
 
 Use for visual fleet monitoring and quick check/up operations.
-

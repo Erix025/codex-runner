@@ -30,8 +30,20 @@ import (
 )
 
 var version = "dev"
+var runSSHFn = sshutil.RunSSH
+var machineCheckFn = machcheck.Check
 
 const defaultRemoteConfigPath = "~/.config/codex-remote/config.yaml"
+
+type machineUpResponse struct {
+	OK      bool   `json:"ok"`
+	Stage   string `json:"stage,omitempty"`
+	Message string `json:"message,omitempty"`
+	Hint    string `json:"hint,omitempty"`
+	Stdout  string `json:"stdout,omitempty"`
+	Stderr  string `json:"stderr,omitempty"`
+	Code    int    `json:"code,omitempty"`
+}
 
 func main() {
 	log.SetFlags(0)
@@ -618,11 +630,34 @@ func machineUp(args []string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
-	up := machineup.Start(ctx, *m)
-	_ = json.NewEncoder(os.Stdout).Encode(up)
-	if !up.OK {
-		os.Exit(1)
+	resp, exitCode := runMachineUp(ctx, *m)
+	_ = json.NewEncoder(os.Stdout).Encode(resp)
+	if exitCode != 0 {
+		os.Exit(exitCode)
 	}
+}
+
+func runMachineUp(ctx context.Context, m config.Machine) (machineUpResponse, int) {
+	up := machineup.Start(ctx, m)
+	resp := machineUpResponse{
+		OK:      up.OK,
+		Stage:   up.Phase,
+		Message: strings.TrimSpace(up.Message),
+		Hint:    up.Hint,
+		Stdout:  up.Stdout,
+		Stderr:  up.Stderr,
+		Code:    up.Code,
+	}
+	if !up.OK {
+		if strings.TrimSpace(up.Error) != "" {
+			resp.Message = up.Error
+		}
+		if strings.Contains(up.Error, "is required") && up.Phase == "precheck" {
+			return resp, 2
+		}
+		return resp, 1
+	}
+	return resp, 0
 }
 
 func machineList(args []string) {
@@ -709,7 +744,7 @@ func machineListSummary(statuses []machcheck.Status) machineSummary {
 		if st.DaemonOK {
 			s.DaemonOK++
 		}
-		if !st.SSHOK || !st.DaemonOK {
+		if !st.DaemonOK || strings.TrimSpace(st.Error) != "" {
 			s.Failed++
 		}
 	}
