@@ -85,7 +85,7 @@ jobs:
           echo "Created and pushed tag $next_tag"
 
       - name: Build release artifacts
-        run: make build-all
+        run: make build-all VERSION=${{ steps.tag.outputs.tag }}
 
       - name: Generate checksums
         shell: bash

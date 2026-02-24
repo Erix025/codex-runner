@@ -25,7 +25,7 @@ import (
 	"codex-runner/internal/shared/tail"
 )
 
-const Version = "0.1.0"
+var Version = "dev"
 
 type Service struct {
 	cfg config.Config
