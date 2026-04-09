@@ -195,6 +195,7 @@ func (s *Service) runExec(execDir string, req execRequest, meta execMeta) {
 	cmd.Stderr = stderrFile
 	configureCmd(cmd)
 	cmd.Env = os.Environ()
+	cmd.Env = append(cmd.Env, "PYTHONUNBUFFERED=1")
 	for k, v := range req.Env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
@@ -216,6 +217,8 @@ func (s *Service) runExec(execDir string, req execRequest, meta execMeta) {
 	_ = writePID(execDir, meta.PID)
 
 	err = cmd.Wait()
+	_ = stdoutFile.Sync()
+	_ = stderrFile.Sync()
 	exitCode := 0
 	if err != nil {
 		if cmd.ProcessState != nil {
@@ -283,6 +286,7 @@ func (s *Service) runExecStreaming(ctx context.Context, execDir string, req exec
 	cmd.Dir = cwd
 	configureCmd(cmd)
 	cmd.Env = os.Environ()
+	cmd.Env = append(cmd.Env, "PYTHONUNBUFFERED=1")
 	for k, v := range req.Env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
@@ -321,6 +325,9 @@ func (s *Service) runExecStreaming(ctx context.Context, execDir string, req exec
 	firstStreamErr := <-streamErrs
 	secondStreamErr := <-streamErrs
 	streamErr := firstNonNil(firstStreamErr, secondStreamErr)
+
+	_ = stdoutFile.Sync()
+	_ = stderrFile.Sync()
 
 	exitCode := 0
 	if waitErr != nil {
