@@ -25,6 +25,7 @@ type Config struct {
 	AllowedCwdRoots []string  `yaml:"allowed_cwd_roots" json:"allowed_cwd_roots"`
 	Projects        []Project `yaml:"projects" json:"projects"`
 	DefaultShell    string    `yaml:"default_shell" json:"default_shell"`
+	MaxFileSize     int64     `yaml:"max_file_size" json:"max_file_size"`
 }
 
 func Default() Config {
@@ -32,6 +33,7 @@ func Default() Config {
 		Listen:         "127.0.0.1:7337",
 		DataDir:        "~/.codexd",
 		RetentionCount: 200,
+		MaxFileSize:    50 * 1024 * 1024,
 	}
 }
 
@@ -49,6 +51,9 @@ retention_count: 200
 
 # Optional: default shell for exec (default: sh)
 # default_shell: bash
+
+# Optional: max file size for file write API (default: 50MB)
+# max_file_size: 52428800
 
 # Optional: enable "project_id + ref" execution (requires git on the remote).
 # projects:
@@ -122,6 +127,9 @@ func Load(path string) (Config, error) {
 	if cfg.RetentionCount <= 0 {
 		cfg.RetentionCount = 200
 	}
+	if cfg.MaxFileSize <= 0 {
+		cfg.MaxFileSize = 50 * 1024 * 1024
+	}
 	for i := range cfg.AllowedCwdRoots {
 		p, err := osutil.ExpandUser(cfg.AllowedCwdRoots[i])
 		if err != nil {
@@ -179,6 +187,12 @@ func applyMiniYAML(cfg *Config, n miniyaml.Node) error {
 	}
 	if v, ok := n["default_shell"]; ok {
 		cfg.DefaultShell, _ = v.(string)
+	}
+	if v, ok := n["max_file_size"]; ok {
+		switch t := v.(type) {
+		case int:
+			cfg.MaxFileSize = int64(t)
+		}
 	}
 	if v, ok := n["projects"]; ok {
 		if arr, ok := v.([]any); ok {

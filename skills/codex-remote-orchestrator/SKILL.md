@@ -32,6 +32,22 @@ codex-remote machine check --machine "$MACHINE"
 
 Only do this when `ssh_ok=true`. If `ssh_ok=false`, treat it as addr-only/direct-path troubleshooting and verify `addr`/port-forward instead of calling `machine up`.
 
+## Step 1.5: File Operations (Optional)
+
+Upload a file to the remote machine:
+
+```bash
+codex-remote file write --machine "$MACHINE" --dst "$REMOTE_PATH" --src "$LOCAL_FILE" --mkdir
+```
+
+Read a file from the remote machine:
+
+```bash
+codex-remote file read --machine "$MACHINE" --path "$REMOTE_PATH" --dst "$LOCAL_FILE"
+```
+
+Use these when you need to transfer configuration, scripts, or data before/after execution.
+
 ## Step 2: Choose Mode
 
 Fast sync mode (short commands):
