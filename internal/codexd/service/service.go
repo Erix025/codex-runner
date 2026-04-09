@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,6 +46,8 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/exec/{id}", s.auth(s.handleExecGet))
 	mux.HandleFunc("GET /v1/exec/{id}/logs", s.auth(s.handleExecLogs))
 	mux.HandleFunc("POST /v1/exec/{id}/cancel", s.auth(s.handleExecCancel))
+	mux.HandleFunc("POST /v1/file/write", s.auth(s.handleFileWrite))
+	mux.HandleFunc("POST /v1/file/read", s.auth(s.handleFileRead))
 	return mux
 }
 
@@ -913,6 +916,158 @@ func collectArtifacts(execDir, cwd string) (json.RawMessage, string) {
 		return json.RawMessage(out), ""
 	}
 	return nil, ""
+}
+
+type fileWriteRequest struct {
+	Path    string `json:"path"`
+	Content string `json:"content"` // base64
+	Mode    int    `json:"mode,omitempty"`
+	MkdirP  bool   `json:"mkdir_p,omitempty"`
+}
+
+type fileReadRequest struct {
+	Path string `json:"path"`
+}
+
+func (s *Service) isPathAllowed(p string) bool {
+	p = filepath.Clean(p)
+	if !filepath.IsAbs(p) {
+		return false
+	}
+	roots := append([]string{}, s.cfg.AllowedCwdRoots...)
+	home, _ := os.UserHomeDir()
+	if home != "" {
+		roots = append(roots, home)
+	}
+	roots = append(roots, s.cfg.DataDir)
+	// Also allow /tmp
+	roots = append(roots, "/tmp")
+	for _, root := range roots {
+		if isWithin(root, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) handleFileWrite(w http.ResponseWriter, r *http.Request) {
+	var req fileWriteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Path == "" {
+		writeErr(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	if !filepath.IsAbs(req.Path) {
+		writeErr(w, http.StatusBadRequest, "path must be absolute")
+		return
+	}
+	if !s.isPathAllowed(req.Path) {
+		writeErr(w, http.StatusForbidden, "path not allowed")
+		return
+	}
+	data, err := base64.StdEncoding.DecodeString(req.Content)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid base64 content")
+		return
+	}
+	if s.cfg.MaxFileSize > 0 && int64(len(data)) > s.cfg.MaxFileSize {
+		writeErr(w, http.StatusRequestEntityTooLarge, "file too large")
+		return
+	}
+	mode := os.FileMode(0o644)
+	if req.Mode > 0 {
+		mode = os.FileMode(req.Mode)
+	}
+	if req.MkdirP {
+		if err := os.MkdirAll(filepath.Dir(req.Path), 0o755); err != nil {
+			writeErr(w, http.StatusInternalServerError, "failed to create directory: "+err.Error())
+			return
+		}
+	}
+	// Atomic write: temp file + rename
+	tmpFile, err := os.CreateTemp(filepath.Dir(req.Path), ".codexd-write-*")
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "failed to create temp file: "+err.Error())
+		return
+	}
+	tmpPath := tmpFile.Name()
+	defer func() {
+		_ = os.Remove(tmpPath) // cleanup on failure
+	}()
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		writeErr(w, http.StatusInternalServerError, "failed to write: "+err.Error())
+		return
+	}
+	if err := tmpFile.Chmod(mode); err != nil {
+		_ = tmpFile.Close()
+		writeErr(w, http.StatusInternalServerError, "failed to set mode: "+err.Error())
+		return
+	}
+	if err := tmpFile.Close(); err != nil {
+		writeErr(w, http.StatusInternalServerError, "failed to close: "+err.Error())
+		return
+	}
+	if err := os.Rename(tmpPath, req.Path); err != nil {
+		writeErr(w, http.StatusInternalServerError, "failed to rename: "+err.Error())
+		return
+	}
+	_ = jsonutil.WriteJSON(w, map[string]any{
+		"ok":            true,
+		"path":          req.Path,
+		"bytes_written": len(data),
+	})
+}
+
+func (s *Service) handleFileRead(w http.ResponseWriter, r *http.Request) {
+	var req fileReadRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Path == "" {
+		writeErr(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	if !filepath.IsAbs(req.Path) {
+		writeErr(w, http.StatusBadRequest, "path must be absolute")
+		return
+	}
+	if !s.isPathAllowed(req.Path) {
+		writeErr(w, http.StatusForbidden, "path not allowed")
+		return
+	}
+	info, err := os.Stat(req.Path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeErr(w, http.StatusNotFound, "file not found")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "failed to stat: "+err.Error())
+		return
+	}
+	if info.IsDir() {
+		writeErr(w, http.StatusBadRequest, "path is a directory")
+		return
+	}
+	if s.cfg.MaxFileSize > 0 && info.Size() > s.cfg.MaxFileSize {
+		writeErr(w, http.StatusRequestEntityTooLarge, "file too large")
+		return
+	}
+	data, err := os.ReadFile(req.Path)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "failed to read: "+err.Error())
+		return
+	}
+	_ = jsonutil.WriteJSON(w, map[string]any{
+		"ok":      true,
+		"path":    req.Path,
+		"content": base64.StdEncoding.EncodeToString(data),
+		"size":    len(data),
+	})
 }
 
 func writeErr(w http.ResponseWriter, status int, msg string) {

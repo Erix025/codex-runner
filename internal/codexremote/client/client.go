@@ -219,6 +219,80 @@ func (c *Client) ExecLogs(ctx context.Context, execID string, opts ExecLogsOptio
 	return err
 }
 
+type FileWriteRequest struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+	Mode    int    `json:"mode,omitempty"`
+	MkdirP  bool   `json:"mkdir_p,omitempty"`
+}
+
+type FileWriteResponse struct {
+	OK           bool   `json:"ok"`
+	Path         string `json:"path"`
+	BytesWritten int    `json:"bytes_written"`
+}
+
+type FileReadResponse struct {
+	OK      bool   `json:"ok"`
+	Path    string `json:"path"`
+	Content string `json:"content"`
+	Size    int    `json:"size"`
+}
+
+func (c *Client) FileWrite(ctx context.Context, req FileWriteRequest) (FileWriteResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return FileWriteResponse{}, err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/v1/file/write", bytes.NewReader(body))
+	if err != nil {
+		return FileWriteResponse{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	c.addAuth(httpReq)
+	resp, err := c.HTTP.Do(httpReq)
+	if err != nil {
+		return FileWriteResponse{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		b, _ := io.ReadAll(resp.Body)
+		return FileWriteResponse{}, fmt.Errorf("file write failed: %s: %s", resp.Status, strings.TrimSpace(string(b)))
+	}
+	var result FileWriteResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return FileWriteResponse{}, err
+	}
+	return result, nil
+}
+
+func (c *Client) FileRead(ctx context.Context, path string) (FileReadResponse, error) {
+	body, err := json.Marshal(map[string]string{"path": path})
+	if err != nil {
+		return FileReadResponse{}, err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/v1/file/read", bytes.NewReader(body))
+	if err != nil {
+		return FileReadResponse{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	c.addAuth(httpReq)
+	resp, err := c.HTTP.Do(httpReq)
+	if err != nil {
+		return FileReadResponse{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		b, _ := io.ReadAll(resp.Body)
+		return FileReadResponse{}, fmt.Errorf("file read failed: %s: %s", resp.Status, strings.TrimSpace(string(b)))
+	}
+	var result FileReadResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return FileReadResponse{}, err
+	}
+	return result, nil
+}
+
 func (c *Client) addAuth(req *http.Request) {
 	if c.Token == "" {
 		return

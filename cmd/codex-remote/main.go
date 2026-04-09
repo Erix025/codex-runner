@@ -60,6 +60,8 @@ func main() {
 		syncCmd(os.Args[2:])
 	case "machine":
 		machineCmd(os.Args[2:])
+	case "file":
+		fileCmd(os.Args[2:])
 	case "dashboard":
 		dashboardCmd(os.Args[2:])
 	case "update":
@@ -83,6 +85,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  codex-remote exec watch --machine <name> --id <exec_id> [--stream stdout|stderr|both] [--poll 1s]")
 	fmt.Fprintln(os.Stderr, "  codex-remote exec doctor --machine <name> [--json]")
 	fmt.Fprintln(os.Stderr, "  codex-remote exec cancel --machine <name> --id <exec_id>")
+	fmt.Fprintln(os.Stderr, "  codex-remote file write   --machine M --dst PATH [--content C | --src FILE] [--mode 0644] [--mkdir]")
+	fmt.Fprintln(os.Stderr, "  codex-remote file read    --machine M --path PATH [--dst LOCAL_FILE]")
 	fmt.Fprintln(os.Stderr, "  codex-remote sync push --machine <name> --src <local> --dst <remote> [--delete] [--exclude PATTERN ...]")
 	fmt.Fprintln(os.Stderr, "  codex-remote sync pull --machine <name> --src <remote> --dst <local> [--delete] [--exclude PATTERN ...]")
 	fmt.Fprintln(os.Stderr, "  codex-remote machine check --machine <name>")
