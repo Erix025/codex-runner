@@ -18,4 +18,5 @@ Decision rules:
 - If long-running, use async and return exec_id first.
 - Mode decision is caller-owned; do not attempt automatic classification inside codex-remote.
 - If status is `finished` and `exit_code != 0`, fetch stderr tail before concluding.
+- If intermediate logs matter (e.g., debugging a traceback), use `exec watch --full`.
 - In readiness checks, use `daemon_ok` as gate; `ssh_ok=false` can still be valid for addr-only machines.

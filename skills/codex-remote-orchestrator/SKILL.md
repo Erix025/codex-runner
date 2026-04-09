@@ -83,6 +83,12 @@ Preferred unified watch:
 codex-remote exec watch --machine "$MACHINE" --id "$EXEC_ID" --stream both --poll 1s
 ```
 
+For complete logs from the beginning (useful for debugging tracebacks):
+
+```bash
+codex-remote exec watch --machine "$MACHINE" --id "$EXEC_ID" --stream both --poll 1s --full
+```
+
 Or explicit logs query (line-safe):
 
 ```bash

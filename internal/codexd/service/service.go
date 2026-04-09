@@ -540,10 +540,13 @@ func (s *Service) handleExecLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	format := r.URL.Query().Get("format") // "" or "jsonl"
+	fullMode := r.URL.Query().Get("full") == "true"
 
 	path := filepath.Join(execDir, stream+".log")
 	var b []byte
-	if maxLines > 0 {
+	if fullMode {
+		b, err = tail.ReadAll(path)
+	} else if maxLines > 0 {
 		b, err = tail.ReadTailLines(path, maxLines)
 	} else if tailStr != "" {
 		b, err = tail.ReadTailBytes(path, maxBytes)
