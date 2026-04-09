@@ -23,6 +23,7 @@
   - `exit_code`
   - `duration_ms`
   - `stdout_log_path` / `stderr_log_path`
+- Supports `--full` flag to output all logs from beginning instead of tail-only.
 
 ## Operator policy
 

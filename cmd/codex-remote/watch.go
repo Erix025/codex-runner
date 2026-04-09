@@ -22,6 +22,7 @@ func execWatch(args []string) {
 	stream := fs.String("stream", "both", "stdout|stderr|both")
 	poll := fs.Duration("poll", time.Second, "poll interval")
 	tail := fs.Int64("tail", 2000, "tail bytes fetched each poll")
+	full := fs.Bool("full", false, "stream all logs from beginning instead of tail")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
@@ -66,7 +67,7 @@ func execWatch(args []string) {
 
 	for {
 		for _, s := range streams {
-			lines, err := fetchLogLines(cl, *execID, s, *tail)
+			lines, err := fetchLogLines(cl, *execID, s, *tail, *full)
 			if err != nil && !isRetryableExecErr(err) {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
@@ -134,17 +135,22 @@ func fetchExecMeta(cl *client.Client, execID string) (map[string]any, error) {
 	return out, err
 }
 
-func fetchLogLines(cl *client.Client, execID string, stream string, tail int64) ([]string, error) {
+func fetchLogLines(cl *client.Client, execID string, stream string, tail int64, full bool) ([]string, error) {
 	var raw []byte
 	err := withRetry(3, func() error {
 		var buf bytes.Buffer
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		if err := cl.ExecLogs(ctx, execID, client.ExecLogsOptions{
+		opts := client.ExecLogsOptions{
 			Stream:    stream,
 			TailBytes: tail,
 			Format:    "jsonl",
-		}, &buf); err != nil {
+		}
+		if full {
+			opts.Full = true
+			opts.TailBytes = -1
+		}
+		if err := cl.ExecLogs(ctx, execID, opts, &buf); err != nil {
 			return err
 		}
 		raw = append(raw[:0], buf.Bytes()...)

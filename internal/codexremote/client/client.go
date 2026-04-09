@@ -51,6 +51,7 @@ type ExecLogsOptions struct {
 	Since     string
 	Until     string
 	Format    string
+	Full      bool
 }
 
 func (c *Client) Health(ctx context.Context) (map[string]any, error) {
@@ -181,7 +182,9 @@ func (c *Client) ExecLogs(ctx context.Context, execID string, opts ExecLogsOptio
 	if opts.Stream != "" {
 		q.Set("stream", opts.Stream)
 	}
-	if opts.TailBytes >= 0 {
+	if opts.Full {
+		q.Set("full", "true")
+	} else if opts.TailBytes >= 0 {
 		q.Set("tail", fmt.Sprintf("%d", opts.TailBytes))
 	}
 	if opts.TailLines > 0 {

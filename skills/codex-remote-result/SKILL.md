@@ -44,6 +44,12 @@ Unified mode:
 codex-remote exec watch --machine "$MACHINE" --id "$EXEC_ID" --stream both --poll 1s
 ```
 
+Add `--full` to stream all logs from the beginning instead of just the tail:
+
+```bash
+codex-remote exec watch --machine "$MACHINE" --id "$EXEC_ID" --stream both --poll 1s --full
+```
+
 ## Cancel
 
 ```bash
