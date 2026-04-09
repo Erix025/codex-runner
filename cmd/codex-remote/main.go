@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -78,8 +80,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "codex-remote: local CLI for codexd")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Usage:")
-	fmt.Fprintln(os.Stderr, "  codex-remote exec run   --machine <name> --cmd <string> [--shell SHELL] [--project <id> --ref <ref>] [--cwd <path>] [--env KEY=VAL ...]")
-	fmt.Fprintln(os.Stderr, "  codex-remote exec start --machine <name> --cmd <string> [--shell SHELL] [--project <id> --ref <ref>] [--cwd <path>] [--env KEY=VAL ...]")
+	fmt.Fprintln(os.Stderr, "  codex-remote exec run   --machine <name> [--cmd <string> | --script PATH] [--shell SHELL] [--project <id> --ref <ref>] [--cwd <path>] [--env KEY=VAL ...]")
+	fmt.Fprintln(os.Stderr, "  codex-remote exec start --machine <name> [--cmd <string> | --script PATH] [--shell SHELL] [--project <id> --ref <ref>] [--cwd <path>] [--env KEY=VAL ...]")
 	fmt.Fprintln(os.Stderr, "  codex-remote exec result --machine <name> --id <exec_id>")
 	fmt.Fprintln(os.Stderr, "  codex-remote exec logs --machine <name> --id <exec_id> [--stream stdout|stderr] [--tail 2000] [--tail-lines N] [--since RFC3339|10m] [--until RFC3339|10m]")
 	fmt.Fprintln(os.Stderr, "  codex-remote exec watch --machine <name> --id <exec_id> [--stream stdout|stderr|both] [--poll 1s] [--full]")
@@ -213,6 +215,7 @@ func execRun(args []string) {
 	projectID := fs.String("project", "", "project id")
 	ref := fs.String("ref", "", "git ref (required if project is set)")
 	cmdStr := fs.String("cmd", "", "command string")
+	scriptPath := fs.String("script", "", "local script file to upload and execute")
 	cwd := fs.String("cwd", "", "working dir (relative or absolute)")
 	shell := fs.String("shell", "", "shell to use (sh, bash, zsh)")
 	envList := multiFlag{}
@@ -220,8 +223,16 @@ func execRun(args []string) {
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
-	if *machineName == "" || *cmdStr == "" {
-		fmt.Fprintln(os.Stderr, "--machine and --cmd are required")
+	if *scriptPath != "" && *cmdStr != "" {
+		fmt.Fprintln(os.Stderr, "error: --script and --cmd are mutually exclusive")
+		os.Exit(2)
+	}
+	if *scriptPath == "" && *cmdStr == "" {
+		fmt.Fprintln(os.Stderr, "error: --cmd or --script is required")
+		os.Exit(2)
+	}
+	if *machineName == "" {
+		fmt.Fprintln(os.Stderr, "--machine is required")
 		os.Exit(2)
 	}
 
@@ -244,6 +255,18 @@ func execRun(args []string) {
 		defer closer()
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if *scriptPath != "" {
+		remotePath, err := uploadScript(ctx, cl, *scriptPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		*cmdStr = remotePath
+	}
+
 	env := map[string]string{}
 	for _, kv := range envList {
 		k, v, ok := strings.Cut(kv, "=")
@@ -262,8 +285,6 @@ func execRun(args []string) {
 		Shell:     *shell,
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	if err := cl.ExecRun(ctx, req, os.Stdout); err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -286,6 +307,7 @@ func execStart(args []string) {
 	projectID := fs.String("project", "", "project id")
 	ref := fs.String("ref", "", "git ref (required if project is set)")
 	cmdStr := fs.String("cmd", "", "command string")
+	scriptPath := fs.String("script", "", "local script file to upload and execute")
 	cwd := fs.String("cwd", "", "working dir (relative or absolute)")
 	shell := fs.String("shell", "", "shell to use (sh, bash, zsh)")
 	envList := multiFlag{}
@@ -293,8 +315,16 @@ func execStart(args []string) {
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
-	if *machineName == "" || *cmdStr == "" {
-		fmt.Fprintln(os.Stderr, "--machine and --cmd are required")
+	if *scriptPath != "" && *cmdStr != "" {
+		fmt.Fprintln(os.Stderr, "error: --script and --cmd are mutually exclusive")
+		os.Exit(2)
+	}
+	if *scriptPath == "" && *cmdStr == "" {
+		fmt.Fprintln(os.Stderr, "error: --cmd or --script is required")
+		os.Exit(2)
+	}
+	if *machineName == "" {
+		fmt.Fprintln(os.Stderr, "--machine is required")
 		os.Exit(2)
 	}
 
@@ -315,6 +345,18 @@ func execStart(args []string) {
 	}
 	if closer != nil {
 		defer closer()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if *scriptPath != "" {
+		remotePath, err := uploadScript(ctx, cl, *scriptPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		*cmdStr = remotePath
 	}
 
 	env := map[string]string{}
@@ -983,4 +1025,28 @@ func isRetryableExecErr(err error) bool {
 		return true
 	}
 	return false
+}
+
+func randomID() string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return fmt.Sprintf("%x", b)
+}
+
+func uploadScript(ctx context.Context, cl *client.Client, scriptPath string) (string, error) {
+	scriptData, err := os.ReadFile(scriptPath)
+	if err != nil {
+		return "", fmt.Errorf("reading script: %w", err)
+	}
+	remotePath := fmt.Sprintf("/tmp/codex-script-%s.sh", randomID())
+	_, err = cl.FileWrite(ctx, client.FileWriteRequest{
+		Path:    remotePath,
+		Content: base64.StdEncoding.EncodeToString(scriptData),
+		Mode:    0o755,
+		MkdirP:  true,
+	})
+	if err != nil {
+		return "", fmt.Errorf("uploading script: %w", err)
+	}
+	return remotePath, nil
 }

@@ -62,6 +62,12 @@ With optional shell override:
 codex-remote exec run --machine "$MACHINE" --shell bash --cmd "$CMD"
 ```
 
+With local script file:
+
+```bash
+codex-remote exec run --machine "$MACHINE" --script "$LOCAL_SCRIPT"
+```
+
 Async mode (long-running commands):
 
 ```bash
@@ -88,6 +94,12 @@ With shell override:
 
 ```bash
 codex-remote exec start --machine "$MACHINE" --shell bash --cmd "$CMD"
+```
+
+With script file:
+
+```bash
+codex-remote exec start --machine "$MACHINE" --script "$LOCAL_SCRIPT"
 ```
 
 With project/ref:
