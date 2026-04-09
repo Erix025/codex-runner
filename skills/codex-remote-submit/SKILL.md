@@ -11,7 +11,8 @@ For fast synchronous streaming, use `codex-remote exec run` via orchestrator rou
 ## Inputs To Confirm
 
 - `machine` (required): machine profile name in `~/.config/codex-remote/config.yaml`
-- `cmd` (required): shell command string
+- `cmd` (required unless `script` is set): shell command string
+- `script` (optional): local script file path (mutually exclusive with `cmd`)
 - `project` (optional): project id configured on remote `codexd`
 - `ref` (optional but required if `project` is provided): branch/tag/commit
 - `cwd` (optional): working directory
@@ -21,6 +22,12 @@ For fast synchronous streaming, use `codex-remote exec run` via orchestrator rou
 
 ```bash
 codex-remote exec start --machine "$MACHINE" --cmd "$CMD"
+```
+
+With local script file:
+
+```bash
+codex-remote exec start --machine "$MACHINE" --script "$LOCAL_SCRIPT"
 ```
 
 With optional git context:

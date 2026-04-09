@@ -56,6 +56,12 @@ Fast sync mode (short commands):
 codex-remote exec run --machine "$MACHINE" --cmd "$CMD"
 ```
 
+With local script file:
+
+```bash
+codex-remote exec run --machine "$MACHINE" --script "$LOCAL_SCRIPT"
+```
+
 Async mode (long-running commands):
 
 ```bash
@@ -70,6 +76,12 @@ Without project context:
 
 ```bash
 codex-remote exec start --machine "$MACHINE" --cmd "$CMD"
+```
+
+With script file:
+
+```bash
+codex-remote exec start --machine "$MACHINE" --script "$LOCAL_SCRIPT"
 ```
 
 With project/ref:
