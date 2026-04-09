@@ -24,6 +24,7 @@ type Config struct {
 	RetentionCount  int       `yaml:"retention_count" json:"retention_count"`
 	AllowedCwdRoots []string  `yaml:"allowed_cwd_roots" json:"allowed_cwd_roots"`
 	Projects        []Project `yaml:"projects" json:"projects"`
+	DefaultShell    string    `yaml:"default_shell" json:"default_shell"`
 }
 
 func Default() Config {
@@ -45,6 +46,9 @@ retention_count: 200
 # Optional: allow absolute cwd outside home/data_dir
 # allowed_cwd_roots:
 #   - /mnt
+
+# Optional: default shell for exec (default: sh)
+# default_shell: bash
 
 # Optional: enable "project_id + ref" execution (requires git on the remote).
 # projects:
@@ -172,6 +176,9 @@ func applyMiniYAML(cfg *Config, n miniyaml.Node) error {
 			}
 			cfg.AllowedCwdRoots = out
 		}
+	}
+	if v, ok := n["default_shell"]; ok {
+		cfg.DefaultShell, _ = v.(string)
 	}
 	if v, ok := n["projects"]; ok {
 		if arr, ok := v.([]any); ok {

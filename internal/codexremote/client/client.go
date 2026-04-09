@@ -37,6 +37,7 @@ type ExecStartRequest struct {
 	Cmd       string            `json:"cmd"`
 	Cwd       string            `json:"cwd,omitempty"`
 	Env       map[string]string `json:"env,omitempty"`
+	Shell     string            `json:"shell,omitempty"`
 }
 
 type ExecStartResponse struct {

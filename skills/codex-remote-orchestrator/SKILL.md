@@ -40,10 +40,22 @@ Fast sync mode (short commands):
 codex-remote exec run --machine "$MACHINE" --cmd "$CMD"
 ```
 
+With optional shell override:
+
+```bash
+codex-remote exec run --machine "$MACHINE" --shell bash --cmd "$CMD"
+```
+
 Async mode (long-running commands):
 
 ```bash
 codex-remote exec start --machine "$MACHINE" --cmd "$CMD"
+```
+
+With optional shell override:
+
+```bash
+codex-remote exec start --machine "$MACHINE" --shell bash --cmd "$CMD"
 ```
 
 Classification is owned by the caller; do not auto-detect inside this tool.
@@ -54,6 +66,12 @@ Without project context:
 
 ```bash
 codex-remote exec start --machine "$MACHINE" --cmd "$CMD"
+```
+
+With shell override:
+
+```bash
+codex-remote exec start --machine "$MACHINE" --shell bash --cmd "$CMD"
 ```
 
 With project/ref:
