@@ -7,3 +7,5 @@
 - `ref is required when project_id is set`: include `--ref` with `--project`.
 - `path not allowed`: file write/read path is outside permitted directories. Check `allowed_cwd_roots` in codexd config.
 - `file too large`: file exceeds `max_file_size` limit in codexd config (default 50MB).
+- `dst path not allowed`: sync upload destination is outside permitted directories.
+- `invalid gzip` / `invalid tar`: corrupted archive during daemon sync upload.

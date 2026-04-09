@@ -293,6 +293,53 @@ func (c *Client) FileRead(ctx context.Context, path string) (FileReadResponse, e
 	return result, nil
 }
 
+func (c *Client) SyncUpload(ctx context.Context, dst string, mkdirP bool, body io.Reader) error {
+	u := fmt.Sprintf("%s/v1/sync/upload?dst=%s", c.BaseURL, url.QueryEscape(dst))
+	if mkdirP {
+		u += "&mkdir_p=true"
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", u, body)
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/x-tar+gzip")
+	c.addAuth(httpReq)
+	resp, err := c.HTTP.Do(httpReq)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("upload failed (%d): %s", resp.StatusCode, string(b))
+	}
+	return nil
+}
+
+func (c *Client) SyncDownload(ctx context.Context, src string, excludes []string, w io.Writer) error {
+	body, err := json.Marshal(map[string]any{"path": src, "excludes": excludes})
+	if err != nil {
+		return err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/v1/sync/download", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	c.addAuth(httpReq)
+	resp, err := c.HTTP.Do(httpReq)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("download failed (%d): %s", resp.StatusCode, string(b))
+	}
+	_, err = io.Copy(w, resp.Body)
+	return err
+}
+
 func (c *Client) addAuth(req *http.Request) {
 	if c.Token == "" {
 		return

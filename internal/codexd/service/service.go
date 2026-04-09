@@ -1,8 +1,10 @@
 package service
 
 import (
+	"archive/tar"
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -48,6 +50,8 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/exec/{id}/cancel", s.auth(s.handleExecCancel))
 	mux.HandleFunc("POST /v1/file/write", s.auth(s.handleFileWrite))
 	mux.HandleFunc("POST /v1/file/read", s.auth(s.handleFileRead))
+	mux.HandleFunc("POST /v1/sync/upload", s.auth(s.handleSyncUpload))
+	mux.HandleFunc("POST /v1/sync/download", s.auth(s.handleSyncDownload))
 	return mux
 }
 
@@ -1067,6 +1071,199 @@ func (s *Service) handleFileRead(w http.ResponseWriter, r *http.Request) {
 		"path":    req.Path,
 		"content": base64.StdEncoding.EncodeToString(data),
 		"size":    len(data),
+	})
+}
+
+func (s *Service) handleSyncUpload(w http.ResponseWriter, r *http.Request) {
+	dst := r.URL.Query().Get("dst")
+	if dst == "" {
+		writeErr(w, http.StatusBadRequest, "dst query parameter is required")
+		return
+	}
+	if !filepath.IsAbs(dst) {
+		writeErr(w, http.StatusBadRequest, "dst must be absolute")
+		return
+	}
+	if !s.isPathAllowed(dst) {
+		writeErr(w, http.StatusForbidden, "dst path not allowed")
+		return
+	}
+	mkdirP := r.URL.Query().Get("mkdir_p") == "true"
+	if mkdirP {
+		if err := os.MkdirAll(dst, 0o755); err != nil {
+			writeErr(w, http.StatusInternalServerError, "failed to create directory: "+err.Error())
+			return
+		}
+	}
+
+	gr, err := gzip.NewReader(r.Body)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid gzip: "+err.Error())
+		return
+	}
+	defer gr.Close()
+
+	tr := tar.NewReader(gr)
+	filesWritten := 0
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid tar: "+err.Error())
+			return
+		}
+
+		target := filepath.Join(dst, hdr.Name)
+		// Security: prevent path traversal
+		if !isWithin(dst, target) {
+			writeErr(w, http.StatusBadRequest, "path traversal detected: "+hdr.Name)
+			return
+		}
+
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, os.FileMode(hdr.Mode)); err != nil {
+				writeErr(w, http.StatusInternalServerError, "failed to create dir: "+err.Error())
+				return
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				writeErr(w, http.StatusInternalServerError, "mkdir failed: "+err.Error())
+				return
+			}
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(hdr.Mode))
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, "failed to create file: "+err.Error())
+				return
+			}
+			if _, err := io.Copy(f, tr); err != nil {
+				_ = f.Close()
+				writeErr(w, http.StatusInternalServerError, "failed to write file: "+err.Error())
+				return
+			}
+			_ = f.Close()
+			filesWritten++
+		case tar.TypeSymlink:
+			// Validate symlink target is within dst
+			linkTarget := hdr.Linkname
+			if filepath.IsAbs(linkTarget) {
+				if !isWithin(dst, linkTarget) {
+					writeErr(w, http.StatusBadRequest, "symlink traversal: "+hdr.Linkname)
+					return
+				}
+			}
+			_ = os.Remove(target)
+			if err := os.Symlink(hdr.Linkname, target); err != nil {
+				writeErr(w, http.StatusInternalServerError, "failed to create symlink: "+err.Error())
+				return
+			}
+			filesWritten++
+		}
+	}
+
+	_ = jsonutil.WriteJSON(w, map[string]any{
+		"ok":            true,
+		"path":          dst,
+		"files_written": filesWritten,
+	})
+}
+
+func (s *Service) handleSyncDownload(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path     string   `json:"path"`
+		Excludes []string `json:"excludes,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Path == "" {
+		writeErr(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	if !filepath.IsAbs(req.Path) {
+		writeErr(w, http.StatusBadRequest, "path must be absolute")
+		return
+	}
+	if !s.isPathAllowed(req.Path) {
+		writeErr(w, http.StatusForbidden, "path not allowed")
+		return
+	}
+
+	info, err := os.Stat(req.Path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeErr(w, http.StatusNotFound, "path not found")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "failed to stat: "+err.Error())
+		return
+	}
+	if !info.IsDir() {
+		writeErr(w, http.StatusBadRequest, "path must be a directory")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/x-tar+gzip")
+	gw := gzip.NewWriter(w)
+	defer gw.Close()
+	tw := tar.NewWriter(gw)
+	defer tw.Close()
+
+	_ = filepath.Walk(req.Path, func(path string, fi os.FileInfo, err error) error {
+		if err != nil {
+			return nil // skip errors
+		}
+
+		rel, err := filepath.Rel(req.Path, path)
+		if err != nil {
+			return nil
+		}
+		if rel == "." {
+			return nil
+		}
+
+		// Check excludes (simple name-based matching)
+		for _, pattern := range req.Excludes {
+			if matched, _ := filepath.Match(pattern, fi.Name()); matched {
+				if fi.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+		}
+
+		hdr, err := tar.FileInfoHeader(fi, "")
+		if err != nil {
+			return nil
+		}
+		hdr.Name = rel
+
+		// Handle symlinks
+		if fi.Mode()&os.ModeSymlink != 0 {
+			link, err := os.Readlink(path)
+			if err != nil {
+				return nil
+			}
+			hdr.Linkname = link
+		}
+
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+
+		if fi.Mode().IsRegular() {
+			f, err := os.Open(path)
+			if err != nil {
+				return nil
+			}
+			defer f.Close()
+			_, _ = io.Copy(tw, f)
+		}
+
+		return nil
 	})
 }
 

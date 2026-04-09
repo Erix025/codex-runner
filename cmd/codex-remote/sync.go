@@ -45,6 +45,7 @@ func runSync(mode string, args []string) {
 	src := fs.String("src", "", "source path")
 	dst := fs.String("dst", "", "destination path")
 	deleteExtra := fs.Bool("delete", false, "delete extra files")
+	viaDaemon := fs.Bool("via-daemon", false, "use daemon HTTP channel instead of SSH rsync")
 	excludes := multiFlag{}
 	fs.Var(&excludes, "exclude", "exclude pattern (repeatable)")
 	if err := fs.Parse(args); err != nil {
@@ -53,10 +54,6 @@ func runSync(mode string, args []string) {
 	if *machineName == "" || strings.TrimSpace(*src) == "" || strings.TrimSpace(*dst) == "" {
 		fmt.Fprintln(os.Stderr, "--machine, --src and --dst are required")
 		os.Exit(2)
-	}
-	if _, err := exec.LookPath("rsync"); err != nil {
-		fmt.Fprintln(os.Stderr, "sync failed: local rsync is not installed")
-		os.Exit(1)
 	}
 
 	cfg, err := loadConfig(*cfgPath)
@@ -68,6 +65,33 @@ func runSync(mode string, args []string) {
 	if !ok {
 		fmt.Fprintln(os.Stderr, "unknown machine:", *machineName)
 		os.Exit(2)
+	}
+
+	if *viaDaemon {
+		cl, closer, err := connectClient(*m)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		if closer != nil {
+			defer closer()
+		}
+		var syncErr error
+		if mode == "push" {
+			syncErr = syncPushViaDaemon(cl, *src, *dst, excludes)
+		} else {
+			syncErr = syncPullViaDaemon(cl, *src, *dst, excludes)
+		}
+		if syncErr != nil {
+			fmt.Fprintf(os.Stderr, "sync via daemon failed: %v\n", syncErr)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if _, err := exec.LookPath("rsync"); err != nil {
+		fmt.Fprintln(os.Stderr, "sync failed: local rsync is not installed")
+		os.Exit(1)
 	}
 	if strings.TrimSpace(m.SSH) == "" {
 		fmt.Fprintln(os.Stderr, "machine.ssh is required")
