@@ -48,6 +48,21 @@ codex-remote file read --machine "$MACHINE" --path "$REMOTE_PATH" --dst "$LOCAL_
 
 Use these when you need to transfer configuration, scripts, or data before/after execution.
 
+## File Sync
+
+For machines with SSH:
+
+```bash
+codex-remote sync push --machine "$MACHINE" --src "$LOCAL_DIR" --dst "$REMOTE_DIR"
+```
+
+For addr-only machines (no SSH):
+
+```bash
+codex-remote sync push --machine "$MACHINE" --src "$LOCAL_DIR" --dst "$REMOTE_DIR" --via-daemon
+codex-remote sync pull --machine "$MACHINE" --src "$REMOTE_DIR" --dst "$LOCAL_DIR" --via-daemon
+```
+
 ## Step 2: Choose Mode
 
 Fast sync mode (short commands):
