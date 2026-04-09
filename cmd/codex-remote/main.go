@@ -76,8 +76,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "codex-remote: local CLI for codexd")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Usage:")
-	fmt.Fprintln(os.Stderr, "  codex-remote exec run   --machine <name> --cmd <string> [--project <id> --ref <ref>] [--cwd <path>] [--env KEY=VAL ...]")
-	fmt.Fprintln(os.Stderr, "  codex-remote exec start --machine <name> --cmd <string> [--project <id> --ref <ref>] [--cwd <path>] [--env KEY=VAL ...]")
+	fmt.Fprintln(os.Stderr, "  codex-remote exec run   --machine <name> --cmd <string> [--shell SHELL] [--project <id> --ref <ref>] [--cwd <path>] [--env KEY=VAL ...]")
+	fmt.Fprintln(os.Stderr, "  codex-remote exec start --machine <name> --cmd <string> [--shell SHELL] [--project <id> --ref <ref>] [--cwd <path>] [--env KEY=VAL ...]")
 	fmt.Fprintln(os.Stderr, "  codex-remote exec result --machine <name> --id <exec_id>")
 	fmt.Fprintln(os.Stderr, "  codex-remote exec logs --machine <name> --id <exec_id> [--stream stdout|stderr] [--tail 2000] [--tail-lines N] [--since RFC3339|10m] [--until RFC3339|10m]")
 	fmt.Fprintln(os.Stderr, "  codex-remote exec watch --machine <name> --id <exec_id> [--stream stdout|stderr|both] [--poll 1s]")
@@ -210,6 +210,7 @@ func execRun(args []string) {
 	ref := fs.String("ref", "", "git ref (required if project is set)")
 	cmdStr := fs.String("cmd", "", "command string")
 	cwd := fs.String("cwd", "", "working dir (relative or absolute)")
+	shell := fs.String("shell", "", "shell to use (sh, bash, zsh)")
 	envList := multiFlag{}
 	fs.Var(&envList, "env", "environment variable KEY=VAL (repeatable)")
 	if err := fs.Parse(args); err != nil {
@@ -254,6 +255,7 @@ func execRun(args []string) {
 		Cmd:       *cmdStr,
 		Cwd:       *cwd,
 		Env:       env,
+		Shell:     *shell,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -281,6 +283,7 @@ func execStart(args []string) {
 	ref := fs.String("ref", "", "git ref (required if project is set)")
 	cmdStr := fs.String("cmd", "", "command string")
 	cwd := fs.String("cwd", "", "working dir (relative or absolute)")
+	shell := fs.String("shell", "", "shell to use (sh, bash, zsh)")
 	envList := multiFlag{}
 	fs.Var(&envList, "env", "environment variable KEY=VAL (repeatable)")
 	if err := fs.Parse(args); err != nil {
@@ -325,6 +328,7 @@ func execStart(args []string) {
 		Cmd:       *cmdStr,
 		Cwd:       *cwd,
 		Env:       env,
+		Shell:     *shell,
 	}
 	out, err := execStartOnce(cl, req)
 	if err != nil && tm != nil {

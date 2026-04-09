@@ -78,6 +78,7 @@ type execRequest struct {
 	Cmd       string            `json:"cmd"`
 	Cwd       string            `json:"cwd"`
 	Env       map[string]string `json:"env"`
+	Shell     string            `json:"shell,omitempty"`
 }
 
 type execMeta struct {
@@ -144,8 +145,31 @@ func (s *Service) handleExecRun(w http.ResponseWriter, r *http.Request) {
 	s.runExecStreaming(r.Context(), execDir, req, meta, ew)
 }
 
+func (s *Service) resolveShell(requested string) string {
+	if requested != "" {
+		return requested
+	}
+	if s.cfg.DefaultShell != "" {
+		return s.cfg.DefaultShell
+	}
+	return "sh"
+}
+
 func (s *Service) runExec(execDir string, req execRequest, meta execMeta) {
 	ctx := context.Background()
+
+	shell := s.resolveShell(req.Shell)
+	if _, err := exec.LookPath(shell); err != nil {
+		meta.Status = "finished"
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		meta.FinishedAt = now
+		code := 127
+		meta.ExitCode = &code
+		meta.Error = fmt.Sprintf("shell not found: %s", shell)
+		_ = writeMeta(execDir, meta)
+		_ = writeExitCode(execDir, code)
+		return
+	}
 
 	workDir, cleanupWorktree, err := s.prepareWorkdir(ctx, execDir, req.ProjectID, req.Ref)
 	if err != nil {
@@ -189,7 +213,7 @@ func (s *Service) runExec(execDir string, req execRequest, meta execMeta) {
 	}
 	defer stderrFile.Close()
 
-	cmd := exec.CommandContext(ctx, "sh", "-lc", req.Cmd)
+	cmd := exec.CommandContext(ctx, shell, "-lc", req.Cmd)
 	cmd.Dir = cwd
 	cmd.Stdout = stdoutFile
 	cmd.Stderr = stderrFile
@@ -245,6 +269,13 @@ func (s *Service) runExec(execDir string, req execRequest, meta execMeta) {
 }
 
 func (s *Service) runExecStreaming(ctx context.Context, execDir string, req execRequest, meta execMeta, ew *eventWriter) {
+	shell := s.resolveShell(req.Shell)
+	if _, err := exec.LookPath(shell); err != nil {
+		finished := s.finalizeMeta(execDir, meta, 127, fmt.Errorf("shell not found: %s", shell))
+		_ = ew.Write(finishedEvent(finished))
+		return
+	}
+
 	workDir, cleanupWorktree, err := s.prepareWorkdir(ctx, execDir, req.ProjectID, req.Ref)
 	if err != nil {
 		finished := s.finalizeMeta(execDir, meta, 127, err)
@@ -279,7 +310,7 @@ func (s *Service) runExecStreaming(ctx context.Context, execDir string, req exec
 	}
 	defer stderrFile.Close()
 
-	cmd := exec.CommandContext(ctx, "sh", "-lc", req.Cmd)
+	cmd := exec.CommandContext(ctx, shell, "-lc", req.Cmd)
 	cmd.Dir = cwd
 	configureCmd(cmd)
 	cmd.Env = os.Environ()

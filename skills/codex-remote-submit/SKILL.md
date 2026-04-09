@@ -16,11 +16,18 @@ For fast synchronous streaming, use `codex-remote exec run` via orchestrator rou
 - `ref` (optional but required if `project` is provided): branch/tag/commit
 - `cwd` (optional): working directory
 - `env` (optional): repeatable `KEY=VAL`
+- `shell` (optional): shell interpreter (`bash`, `sh`, `zsh`; default: server config or `sh`)
 
 ## Command Pattern
 
 ```bash
 codex-remote exec start --machine "$MACHINE" --cmd "$CMD"
+```
+
+With optional shell override:
+
+```bash
+codex-remote exec start --machine "$MACHINE" --shell bash --cmd "$CMD"
 ```
 
 With optional git context:

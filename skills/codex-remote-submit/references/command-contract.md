@@ -15,6 +15,10 @@ Failure mode:
   - connection reset
   - auth token mismatch
 
+Optional parameters:
+
+- `--shell SHELL`: override the shell interpreter (default: server `default_shell` config or `sh`)
+
 Related sync mode:
 
 - Use `codex-remote exec run` for synchronous JSONL streaming.
